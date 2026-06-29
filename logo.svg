@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <radialGradient id="glow-center" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00f3ff" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00f3ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="core-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00f3ff" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#00d4e0" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0080ff" stop-opacity="0.8"/>
+    </radialGradient>
+    <filter id="blur-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background glow -->
+  <circle cx="100" cy="100" r="95" fill="url(#glow-center)"/>
+
+  <!-- Outer orbit ring -->
+  <circle cx="100" cy="100" r="88" stroke="#00f3ff" stroke-width="0.8" stroke-dasharray="5 4" opacity="0.25"/>
+
+  <!-- Hexagon ring (Qwen-inspired geometry) -->
+  <path d="M100 28 L156 60 L156 124 L100 156 L44 124 L44 60 Z"
+        stroke="#00f3ff" stroke-width="1.2" opacity="0.3"/>
+
+  <!-- Middle hex -->
+  <path d="M100 48 L140 72 L140 120 L100 144 L60 120 L60 72 Z"
+        stroke="#00f3ff" stroke-width="1" opacity="0.2"/>
+
+  <!-- Lightning bolt — main mark -->
+  <!-- Outer (glow layer) -->
+  <polygon points="113 32 65 108 96 108 86 172 145 92 112 92"
+           fill="#00f3ff" opacity="0.12" filter="url(#soft-glow)"/>
+
+  <!-- Main bolt -->
+  <polygon points="113 38 68 108 96 108 87 166 142 94 112 94"
+           fill="url(#core-glow)" filter="url(#blur-glow)"/>
+
+  <!-- Inner highlight -->
+  <polygon points="108 52 82 104 99 104 92 148 130 100 109 100"
+           fill="#00f3ff" opacity="0.45"/>
+
+  <!-- Neural nodes on hex vertices -->
+  <circle cx="100" cy="28"  r="3" fill="#00f3ff" opacity="0.9"/>
+  <circle cx="156" cy="60"  r="3" fill="#00f3ff" opacity="0.9"/>
+  <circle cx="156" cy="124" r="3" fill="#00f3ff" opacity="0.9"/>
+  <circle cx="100" cy="156" r="3" fill="#00f3ff" opacity="0.9"/>
+  <circle cx="44"  cy="124" r="3" fill="#00f3ff" opacity="0.9"/>
+  <circle cx="44"  cy="60"  r="3" fill="#00f3ff" opacity="0.9"/>
+
+  <!-- Connection lines from vertices to bolt centroid -->
+  <line x1="100" y1="31"  x2="103" y2="70"  stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+  <line x1="153" y1="62"  x2="130" y2="82"  stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+  <line x1="153" y1="122" x2="135" y2="105" stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+  <line x1="100" y1="153" x2="100" y2="118" stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+  <line x1="47"  y1="122" x2="72"  y2="105" stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+  <line x1="47"  y1="62"  x2="74"  y2="82"  stroke="#00f3ff" stroke-width="0.6" opacity="0.25"/>
+</svg>

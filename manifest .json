@@ -1,0 +1,103 @@
+{
+  "name": "AETHER Neural Interface",
+  "short_name": "AETHER",
+  "description": "Open-source AI — Agent Mode, Call Mode, 22 providers, FLUX.2 images, offline STT. GPL-3.0.",
+  "version": "5.15",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#020308",
+  "theme_color": "#00f3ff",
+  "lang": "en",
+  "categories": ["productivity", "utilities", "ai"],
+  "icons": [
+    {
+      "src": "logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "label": "AETHER — AI interface with Agent Mode and Call Mode",
+      "form_factor": "wide"
+    },
+    {
+      "label": "AETHER — mobile-first AI interface",
+      "form_factor": "narrow"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Chat",
+      "short_name": "Chat",
+      "description": "Start a new AI conversation",
+      "url": "./index.html?action=new",
+      "icons": [{ "src": "logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "AETHER Call",
+      "short_name": "Call",
+      "description": "Start a voice call with AETHER",
+      "url": "./index.html?action=call",
+      "icons": [{ "src": "logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Deep Research",
+      "short_name": "Research",
+      "description": "Activate Deep Research mode",
+      "url": "./index.html?action=research",
+      "icons": [{ "src": "logo.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Agent Mode",
+      "short_name": "Agent",
+      "description": "Run autonomous multi-step agent",
+      "url": "./index.html?action=agent",
+      "icons": [{ "src": "logo.svg", "sizes": "any" }]
+    }
+  ],
+  "handle_links": "preferred",
+  "prefer_related_applications": false,
+  "scope": "./",
+  "id": "aether-neural-interface-v5",
+  "launch_handler": {
+    "client_mode": ["focus-existing", "auto"]
+  },
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "protocol_handlers": [
+    {
+      "protocol": "web+aether",
+      "url": "./index.html?protocol=%s"
+    }
+  ],
+  "share_target": {
+    "action": "./index.html",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "file_handlers": [
+    {
+      "action": "./index.html",
+      "accept": {
+        "text/plain": [".txt", ".md"],
+        "text/markdown": [".md", ".mmd"],
+        "application/json": [".json"]
+      }
+    }
+  ]
+}

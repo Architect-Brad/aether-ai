@@ -1,0 +1,1413 @@
+<!DOCTYPE html>
+<!-- ═══════════════════════════════════════════════════════════
+  AETHER Neural Interface v5.14 — index.html
+  Copyright (C) 2026 The Architect · GPL-3.0-or-later
+
+  This is the entire UI shell. ~1,300 lines of HTML.
+  No React. No Vue. No Svelte. No Astro. No Next.js.
+  Just HTML, the way the web was meant to be.
+
+  If you're a frontend developer reading this and wondering
+  where the component framework is — there isn't one.
+  The component framework is your imagination.
+  And a lot of CSS classes.
+
+  DISCLAIMER: This HTML file loads 15+ CDN resources on first
+  paint. If your ad blocker blocks jsdelivr, half the app breaks.
+  We know. We're working on it. Or we're not. It's complicated.
+
+  STRUCTURE:
+  1. SVG Icon Sprite (60+ icons, inline to avoid extra requests)
+  2. Splash Screen (the cinematic loading experience)
+  3. Main App Container
+     - Sidebar (conversation history)
+     - Dashboard (status bar, control panel, chat, input)
+  4. Modals (Settings, Setup, Hooks, Services, Workspace, etc.)
+
+  To add a new modal: copy an existing modal block, change the ID,
+  update the JS references, and wire it up in the event listeners.
+  It's copy-paste engineering and we're not ashamed.
+  ═══════════════════════════════════════════════════════════ -->
+<html lang="en" data-device="unknown">
+<head>
+    <!-- ═══ META: The boring stuff that makes browsers behave ═══ -->
+    <meta charset="UTF-8">
+    <title>AETHER :: NEURAL INTERFACE v5.14</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="AETHER Neural Interface — Open-source AI. Local models, cloud APIs, 16 tools. GPL-3.0.">
+    <meta name="theme-color" content="#00f3ff">
+
+    <!-- ═══ FAVICON: Our logo — lightning bolt in hex ring ═══ -->
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link rel="apple-touch-icon" href="logo.svg">
+
+    <!-- ═══ DEVICE DETECTION: Runs before first paint to prevent layout flash ═══ -->
+    <!-- Yes, this inline script is ugly. But it prevents a 200ms flash of wrong layout. -->
+    <!-- That's the difference between "feels native" and "feels like a website." -->
+    <script>(function(){var c=window.matchMedia('(pointer:coarse)').matches,w=window.innerWidth;var cls=(!c||w>=1100)?'device-desktop':(c&&w>=768)?'device-tablet':'device-mobile';document.documentElement.classList.add(cls);document.documentElement.dataset.device=cls.replace('device-','');})();</script>
+
+    <!-- ═══ STYLESHEETS: Our 7,300-line masterpiece + KaTeX for math ═══ -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+    <!-- KaTeX loads only in standards mode to prevent quirks-mode warning in WebViews -->
+    <script>
+    if (document.compatMode === 'CSS1Compat') {
+        const s1 = document.createElement('script'); s1.defer = true;
+        s1.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js';
+        s1.crossOrigin = 'anonymous'; document.head.appendChild(s1);
+        const s2 = document.createElement('script'); s2.defer = true;
+        s2.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js';
+        s2.crossOrigin = 'anonymous'; document.head.appendChild(s2);
+    }
+    </script>
+    <!-- Localforage polyfill: if CDN fails (file://, offline, blocked), fall back to localStorage -->
+    <script>
+    window._localforageReady = false;
+    // Inline localStorage-based fallback for localforage
+    window._localforagePolyfill = {
+        _store: {},
+        getItem: async function(k) { try { const v = localStorage.getItem('lf_'+k); return v ? JSON.parse(v) : null; } catch(e) { return null; } },
+        setItem: async function(k, v) { try { localStorage.setItem('lf_'+k, JSON.stringify(v)); } catch(e) {} },
+        removeItem: async function(k) { try { localStorage.removeItem('lf_'+k); } catch(e) {} },
+        clear: async function() { try { Object.keys(localStorage).filter(k=>k.startsWith('lf_')).forEach(k=>localStorage.removeItem(k)); } catch(e) {} },
+        keys: async function() { try { return Object.keys(localStorage).filter(k=>k.startsWith('lf_')).map(k=>k.slice(3)); } catch(e) { return []; } }
+    };
+    </script>
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 5: CDN DEPENDENCIES
+  15 external libraries loaded from CDNs. Each has an onerror
+  handler so the app doesn't crash if one fails.
+  If all of these load, you have a better internet connection
+  than most of our users. Enjoy the full experience.
+  If some fail, AETHER degrades gracefully.
+  Order matters: localforage → transformers → math → mermaid → etc.
+  Don't reorder these unless you enjoy debugging load order.
+  ═══════════════════════════════════════════════════════════ -->
+    <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"
+            onerror="window.localforage = window._localforagePolyfill; console.warn('[AETHER] localforage CDN failed — using localStorage fallback');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js" onerror="console.warn('[AETHER] transformers.js not loaded — WhisperJS unavailable')"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.11.0/math.min.js" onerror="window.math=null;"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js" onerror="window.mermaid={init:()=>{},run:()=>Promise.resolve()};console.warn('[AETHER] Mermaid not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.min.js" onerror="window.ort=null;"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@gutenye/ocr-browser@1.4.8/dist/index.min.js" onerror="window.OCR=null;"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js" onerror="window.Tesseract=null;"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onerror="window.Chart=null;"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js" onerror="window.mammoth=null;"></script>
+
+    <!-- ═══ HIGHLIGHT.JS — Static code block syntax highlighting ══════
+         highlight.js is purpose-built for read-only display, exactly what
+         we need for chat message code blocks. Single UMD bundle, 190+
+         languages, works synchronously. Previous approach used CodeMirror
+         (an editor widget) to extract highlighting — wrong tool for this job.
+         highlight.js replaces the hand-rolled applySH() regex highlighter.
+         Falls back to applySH() on CDN failure. Nothing explodes.
+    ════════════════════════════════════════════════════════════════ -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/atom-one-dark.min.css"
+          onerror="console.warn('[AETHER] highlight.js theme not loaded')">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
+            onerror="window.hljs=null; console.warn('[AETHER] highlight.js not loaded — using built-in highlighter');"></script>
+
+    <!-- ═══ PRETTIER — In-block code formatter ══════════════════════
+         Prettier 3.x UMD. Standalone + all parser plugins.
+         IMPORTANT: In Prettier 3.x UMD, each plugin file registers itself
+         directly on window.prettierPlugins.X — NOT as window.prettierPluginX.
+         The old collector was looking for the wrong global names. Fixed below.
+         Falls back gracefully if CDN blocked — Format button simply hides.
+    ════════════════════════════════════════════════════════════════ -->
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/standalone.js"
+            onerror="window.prettier=null; console.warn('[AETHER] Prettier not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/babel.js"
+            onerror="console.warn('[AETHER] Prettier babel plugin not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/estree.js"
+            onerror="console.warn('[AETHER] Prettier estree plugin not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/typescript.js"
+            onerror="console.warn('[AETHER] Prettier typescript plugin not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/postcss.js"
+            onerror="console.warn('[AETHER] Prettier postcss plugin not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/html.js"
+            onerror="console.warn('[AETHER] Prettier html plugin not loaded');"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/markdown.js"
+            onerror="console.warn('[AETHER] Prettier markdown plugin not loaded');"></script>
+    <script src="https://js.puter.com/v2/"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js" onerror="window.pdfjsLib=null;"></script>
+    <script>
+        window.PISTON_API = 'https://emkc.org/api/v2/piston';
+        window.addEventListener('load', () => {
+            if (typeof ort !== 'undefined') {
+                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
+                ort.env.wasm.numThreads = 1;
+            }
+
+            // ── highlight.js configuration ────────────────────────────────
+            // Configure hljs for our dark cyberpunk theme. Disable auto-detect
+            // (we always know the language from the code fence) and register
+            // common languages we want available. hljs is already loaded as UMD.
+            if (window.hljs) {
+                hljs.configure({
+                    ignoreUnescapedHTML: true,
+                    // Don't auto-highlight — we call hljs.highlight() explicitly
+                    // with the language, so no scanning needed on page load.
+                });
+                console.info('[AETHER] highlight.js ready. Version:', hljs.versionString || '11.x');
+            }
+
+            // ── Prettier 3.x plugin resolution ───────────────────────────
+            // In Prettier 3.x UMD the plugins register themselves automatically
+            // on window.prettierPlugins.X when their scripts execute. By the time
+            // the load event fires all scripts have run, so this read is safe.
+            // We expose a helper that getPrettierParser() calls at format-time
+            // (not at page-load) so late-loading plugins are always found.
+            window.getPrettierPlugin = function(name) {
+                // Prettier 3.x UMD: window.prettierPlugins.babel etc
+                if (window.prettierPlugins && window.prettierPlugins[name]) {
+                    return window.prettierPlugins[name];
+                }
+                // Fallback: some builds expose prettierPluginBabel etc
+                const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
+                return window['prettierPlugin' + capitalized] || null;
+            };
+            if (window.prettier) {
+                const available = ['babel','estree','typescript','postcss','html','markdown']
+                    .filter(n => window.getPrettierPlugin(n));
+                console.info('[AETHER] Prettier 3 ready. Plugins:', available.join(', ') || 'none (check CDN)');
+            }
+
+            // ── CodeMirror 6 — dynamic ESM import for AETHER Code editor ──
+            // CM6 packages are ESM-only — no UMD builds. We load them via
+            // dynamic import() from esm.sh (a CDN that serves proper ESM for
+            // any npm package). This runs after page load so it never blocks.
+            // The CM editor is only mounted when the user opens AETHER Code,
+            // so the lazy load is both correct and efficient.
+            //
+            // Exposed on window.CM6 for the mountCM6Editor() function in script.js.
+            window.CM6 = null;
+            import('https://esm.sh/codemirror@6?bundle')
+                .then(async cm => {
+                    const [langPack, oneDark] = await Promise.all([
+                        import('https://esm.sh/@codemirror/language-data@6?bundle'),
+                        import('https://esm.sh/@codemirror/theme-one-dark@6?bundle'),
+                    ]);
+                    window.CM6 = { cm, langPack, oneDark };
+                    // Dispatch event so script.js can react if the editor was
+                    // already requested before CM6 finished loading
+                    document.dispatchEvent(new Event('cm6-ready'));
+                    console.info('[AETHER] CodeMirror 6 loaded via ESM — AETHER Code editor ready');
+                })
+                .catch(e => {
+                    console.warn('[AETHER] CodeMirror 6 ESM load failed:', e.message, '— editor will use textarea fallback');
+                });
+        });
+    </script>
+    <style>body{margin:0;background:#050505;font-family:'Courier New',monospace;overflow-x:hidden}</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 1: SVG ICON SPRITE
+  60+ icons defined as <symbol> elements. Inline to avoid
+  60 extra HTTP requests. Yes, this makes the HTML file bigger.
+  No, we don't care. One request for 60 icons beats 60 requests.
+  If you need a new icon, add it here with a unique id="ic-*".
+  Use it anywhere with: <svg><use href="#ic-your-icon"/></svg>
+  ═══════════════════════════════════════════════════════════ -->
+<!-- ═══════════════ SVG ICONS ═══════════════ -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="ic-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
+  <symbol id="ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="ic-stop" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
+  <symbol id="ic-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></symbol>
+  <symbol id="ic-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></symbol>
+  <symbol id="ic-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="ic-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="ic-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22V12"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/><rect x="8" y="2" width="2" height="7" rx="1"/><rect x="14" y="2" width="2" height="7" rx="1"/></symbol>
+  <symbol id="ic-chart-bar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></symbol>
+  <symbol id="ic-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="ic-dollar" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></symbol>
+  <symbol id="ic-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></symbol>
+  <symbol id="ic-cube" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></symbol>
+  <symbol id="ic-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></symbol>
+  <symbol id="ic-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></symbol>
+  <symbol id="ic-paperclip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+  <symbol id="ic-zap" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></symbol>
+  <symbol id="ic-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2a3 3 0 0 0-3 3c-1.5 0-3 1.5-3 3a3 3 0 0 0 1 2.24A3 3 0 0 0 5 13a3.5 3.5 0 0 0 3.5 3.5c.17.5.75 1.5 2 1.5s1.83-1 2-1.5A3.5 3.5 0 0 0 16 13a3 3 0 0 0 .5-2.76A3 3 0 0 0 17.5 8c0-1.5-1.5-3-3-3a3 3 0 0 0-3-3h-2z"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="9" y1="10" x2="15" y2="10"/></symbol>
+  <symbol id="ic-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></symbol>
+  <symbol id="ic-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></symbol>
+  <symbol id="ic-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="ic-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></symbol>
+  <symbol id="ic-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></symbol>
+  <symbol id="ic-circle-filled" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></symbol>
+  <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></symbol>
+  <symbol id="ic-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></symbol>
+  <symbol id="ic-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.374 0 0 5.373 0 12c0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23A11.509 11.509 0 0 1 12 5.803c1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576C20.566 21.797 24 17.3 24 12c0-6.627-5.373-12-12-12z"/></symbol>
+  <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></symbol>
+  <symbol id="ic-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="ic-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></symbol>
+  <symbol id="ic-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></symbol>
+  <symbol id="ic-warning" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="ic-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></symbol>
+  <symbol id="ic-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></symbol>
+  <symbol id="ic-minimize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></symbol>
+  <symbol id="ic-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></symbol>
+  <symbol id="ic-target" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="ic-terminal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></symbol>
+  <symbol id="ic-rotate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.95"/></symbol>
+  <symbol id="ic-database" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></symbol>
+  <symbol id="ic-signal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="20" r="1" fill="currentColor"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/></symbol>
+  <symbol id="ic-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="ic-atom" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="1" fill="currentColor"/><ellipse cx="12" cy="12" rx="10" ry="4"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(120 12 12)"/></symbol>
+  <symbol id="ic-building" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="1"/><path d="M3 9h18"/><path d="M9 21V9"/></symbol>
+  <symbol id="ic-qwen35" viewBox="0 0 32 32" fill="none">
+    <!-- Hexagon outer ring -->
+    <path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+    <!-- Inner hexagon -->
+    <path d="M16 7 L23 11 L23 19 L16 23 L9 19 L9 11 Z" stroke="currentColor" stroke-width="1" stroke-linejoin="round" opacity="0.6"/>
+    <!-- Neural nodes -->
+    <circle cx="16" cy="15" r="2.5" fill="currentColor"/>
+    <!-- Orbital dots -->
+    <circle cx="16" cy="8"  r="1.2" fill="currentColor" opacity="0.9"/>
+    <circle cx="23" cy="19" r="1.2" fill="currentColor" opacity="0.9"/>
+    <circle cx="9"  cy="19" r="1.2" fill="currentColor" opacity="0.9"/>
+    <!-- Connection lines -->
+    <line x1="16" y1="10"  x2="16" y2="12.5" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+    <line x1="22" y1="18"  x2="18.2" y2="16.2" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+    <line x1="10" y1="18"  x2="13.8" y2="16.2" stroke="currentColor" stroke-width="0.8" opacity="0.7"/>
+  </symbol>
+  <symbol id="ic-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></symbol>
+  <symbol id="ic-mic-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></symbol>
+  <symbol id="ic-code-mode" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/><line x1="12" y1="4" x2="12" y2="20" stroke-width="1.5" opacity="0.5"/></symbol>
+  <symbol id="ic-flame" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+  <symbol id="ic-spark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L9 9H2l5.5 4-2 7L12 16l6.5 4-2-7L22 9h-7z"/></symbol>
+  <symbol id="ic-crystal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="8.5" x2="22" y2="8.5"/></symbol>
+</svg>
+
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 2: SPLASH SCREEN
+  The cinematic loading screen. Pulsing rings, progress bar,
+  feature highlights — all designed to make the 3-5 second
+  CDN load time feel intentional rather than like waiting.
+  It disappears when JS finishes and the main app appears.
+  If you see this for more than 10 seconds, your internet
+  is slow or jsdelivr is having a bad day.
+  ═══════════════════════════════════════════════════════════ -->
+<!-- SPLASH -->
+<div id="splash-screen" class="splash-screen">
+    <div class="splash-content">
+        <div class="splash-logo">
+            <div class="logo-ring"></div><div class="logo-ring"></div><div class="logo-ring"></div>
+            <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+        </div>
+        <h1 class="splash-title">AETHER</h1>
+        <div class="splash-subtitle">NEURAL INTERFACE v5.14</div>
+        <div class="splash-loading">
+            <div class="loading-bar"><div class="loading-progress" id="splash-progress"></div></div>
+            <div class="loading-text" id="splash-text">INITIALIZING NEURAL CORE...</div>
+        </div>
+        <div class="splash-features">
+            <span class="feature-item"><svg class="ic-sm"><use href="#ic-brain"/></svg> COGNITIVE ENGINE</span>
+            <span class="feature-item"><svg class="ic-sm"><use href="#ic-camera"/></svg> OCR VISION</span>
+            <span class="feature-item"><svg class="ic-sm"><use href="#ic-dollar"/></svg> QUOTA SYSTEM</span>
+            <span class="feature-item"><svg class="ic-sm"><use href="#ic-layers"/></svg> DUAL CONTEXT</span>
+        </div>
+    </div>
+</div>
+
+<div class="scanline"></div>
+
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 3: MAIN APP CONTAINER
+  The actual application. Hidden until the splash screen fades.
+  Contains the sidebar (conversation history) and the dashboard
+  (everything else: status bar, controls, chat, input).
+  This is where the magic happens. Or the bugs. Usually both.
+  ═══════════════════════════════════════════════════════════ -->
+<!-- MAIN APP -->
+<div class="app-container" style="display:none" id="main-app">
+
+    <!-- ═══ SIDEBAR: Tabs — History / AETHER Code ═══ -->
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="sidebar-tabs" id="sidebar-tabs">
+                <button class="sidebar-tab active" data-tab="history"><svg class="ic-xs"><use href="#ic-zap"/></svg> History</button>
+                <button class="sidebar-tab" data-tab="code"><svg class="ic-xs"><use href="#ic-code-mode"/></svg> Code</button>
+            </div>
+            <button class="icon-btn" id="sidebar-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button>
+        </div>
+
+        <!-- History tab panel -->
+        <div class="sidebar-tab-panel" id="sidebar-panel-history">
+            <div class="sidebar-controls">
+                <button class="new-chat-btn" id="new-chat-main"><svg class="ic-sm"><use href="#ic-plus"/></svg> NEW CHAT</button>
+            </div>
+            <div class="conversation-list" id="conversation-list"></div>
+            <div class="sidebar-footer">
+                <button class="clear-all-btn" id="clear-all-conversations"><svg class="ic-sm"><use href="#ic-trash"/></svg> CLEAR ALL</button>
+            </div>
+        </div>
+
+        <!-- Code tab panel -->
+        <div class="sidebar-tab-panel hidden" id="sidebar-panel-code">
+            <div class="sidebar-controls">
+                <button class="new-chat-btn" id="coding-link-folder-btn" style="flex:1"><svg class="ic-sm"><use href="#ic-folder"/></svg> Link Folder</button>
+            </div>
+            <!-- Queue -->
+            <div class="code-panel-section">
+                <div class="code-panel-section-header">
+                    <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Queue</span>
+                    <button id="queue-clear-btn" title="Clear completed" class="code-panel-btn">✕</button>
+                </div>
+                <div class="queue-list" id="queue-list">
+                    <div class="queue-empty">No tasks queued. Type :queue in chat or add below.</div>
+                </div>
+                <div class="queue-input-row">
+                    <input type="text" id="queue-input" placeholder="Add task: lint, test, deploy, or shell command…" class="queue-input">
+                    <button id="queue-add-btn" class="code-panel-btn primary">+</button>
+                </div>
+            </div>
+            <!-- Symbol Search -->
+            <div class="code-panel-section">
+                <div class="code-panel-section-header">
+                    <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg> Symbols</span>
+                    <button id="symbol-refresh-btn" title="Re-index symbols" class="code-panel-btn">↻</button>
+                </div>
+                <input type="text" id="symbol-search-input" placeholder="Search functions, classes…" class="queue-input">
+                <div class="symbol-list" id="symbol-list">
+                    <div class="queue-empty">Link a folder to index symbols.</div>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Sidebar reopen badge (desktop only, shown when sidebar is collapsed) -->
+    <div id="sidebar-reopen-badge" class="sidebar-reopen-badge" title="tap to open side bar" onclick="var s=document.getElementById('sidebar');if(s){s.classList.remove('hidden');s.style.transform='';s.style.pointerEvents='';s.style.visibility='';}if(typeof updateSidebarBadge==='function')updateSidebarBadge()">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+    </div>
+
+    <!-- ═══ DASHBOARD: The main content area. Status bar, controls, chat, input. ═══ -->
+    <div class="dashboard">
+
+        <!-- STATUS BAR -->
+        <div class="status-bar">
+            <div class="status-left">
+                <button class="icon-btn sidebar-toggle" id="sidebar-open"><svg class="ic-sm"><use href="#ic-menu"/></svg></button>
+                <span class="status-divider">│</span>
+                <span class="status-logo"><svg class="ic-sm"><use href="#ic-zap"/></svg> AETHER</span>
+                <span class="status-divider">│</span>
+                <span class="status-model-pill" id="status-model-pill"><svg class="ic-xs" style="opacity:.5"><use href="#ic-cpu"/></svg><span id="status-model-name">local</span></span>
+                <span class="status-divider">│</span>
+                <span class="status-state">v5.14 NEURAL</span>
+            </div>
+            <div class="status-right">
+            <button id="btn-cal-connect" class="cal-indicator" onclick="window.authorizeCalendar?window.authorizeCalendar():null" title="Connect Google Calendar">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                    </svg>
+                </button>
+
+                <span id="coding-mode-indicator" class="cot-badge" style="display:none;color:#ffd700;border-color:rgba(255,215,0,.3)"><svg class="ic-xs"><use href="#ic-code-mode"/></svg>⌨ AETHER CODE</span>
+                <span id="reflection-dot" class="reflection-dot" title="AETHER is reflecting…"></span>
+                <span class="status-divider">│</span>
+                <span id="quota-status-badge" class="quota-status-badge" style="display:none"><svg class="ic-xs"><use href="#ic-dollar"/></svg><span id="quota-status-text">$0.00</span></span>
+                <span id="quota-sep" class="status-divider" style="display:none">│</span>
+                <span id="latency-display" class="latency-indicator" style="display:none">TTFT: --ms</span>
+                <span class="status-divider" id="metrics-sep-1" style="display:none">│</span>
+                <span id="tps-display" class="tps-indicator" style="display:none">TPS: --</span>
+                <span class="status-divider" id="metrics-sep-2" style="display:none">│</span>
+                <span id="connection-status" class="connection-indicator"><svg class="ic-xs"><use href="#ic-circle-filled"/></svg></span>
+                <span id="error-count-badge" class="error-count-badge" style="display:none" title="Errors recorded — click to view" onclick="window.openErrorLog?.()">0</span>
+                <span class="status-divider">│</span>
+                <span id="clock">--:--:--</span>
+            </div>
+        </div>
+
+        <!-- CONTEXT BAR -->
+        <div class="context-bar" id="context-bar">
+            <div class="context-label">
+                <span>CTX</span><span id="token-used">0</span>/<span id="token-limit">8000</span>
+            </div>
+            <div class="context-progress-container">
+                <div class="context-progress-fill" id="context-progress-fill" style="width:0%"></div>
+            </div>
+        </div>
+
+        <!-- CONTROL PANEL -->
+        <div class="control-sector">
+            <button class="cmd-btn" id="btn-new-chat"><svg class="ic-sm"><use href="#ic-plus"/></svg> NEW</button>
+            <button class="cmd-btn" id="btn-stop" disabled><svg class="ic-sm"><use href="#ic-stop"/></svg> STOP</button>
+            <button class="cmd-btn" id="btn-regenerate" disabled><svg class="ic-sm"><use href="#ic-refresh"/></svg> RETRY</button>
+            <button class="cmd-btn" id="btn-deep-research" title="Deep Research mode"><svg class="ic-sm"><use href="#ic-atom"/></svg> DEEP</button>
+            <button class="cmd-btn" id="btn-coding-mode" title="AETHER Code — Plan-first autonomous coding"><svg class="ic-sm"><use href="#ic-code-mode"/></svg>⌨ AETHER CODE</button>
+            <button class="cmd-btn" id="btn-bg-mode" title="Background Tasks &amp; Notifications"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> BG</button>
+            <button class="cmd-btn" id="btn-agent-mode" title="Agent Mode — autonomous multi-step execution"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><circle cx="19" cy="5" r="2" fill="currentColor" stroke="none"/></svg> AGENT</button>
+            <button class="cmd-btn" id="btn-call-mode" title="Call Mode — AETHER calls you for a voice check-in"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.48 2 2 0 0 1 3.61 1.3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
+            <button class="cmd-btn" id="btn-aether-soul" title="AETHER Self-Model — view philosophical identity &amp; user model" onclick="typeof openSoulViewer==='function'&&openSoulViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 2 7 12 22 22 7"/></svg> SOUL</button>
+            <button class="cmd-btn" id="btn-skills" title="AETHER Skills — activate specialised capability packs" onclick="typeof openSkillsPanel==='function'&&openSkillsPanel()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> SKILLS</button>
+            <button class="cmd-btn" id="btn-rag-viewer" title="RAG Knowledge Base — view, search, manage stored documents" onclick="typeof openRagViewer==='function'&&openRagViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6a9 3 0 0 0 18 0V5"/><path d="M3 11v6a9 3 0 0 0 18 0v-6"/></svg> RAG</button>
+            <button class="cmd-btn" id="btn-auth" title="Account — sign in and manage your profile" onclick="typeof openAccountPage==='function'&&openAccountPage()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Account</button>
+            <button class="cmd-btn" id="puter-connect-btn" title="Connect Puter AI Cloud — unlocks terminal, deploy, cloud storage" onclick="typeof connectPuter==='function'&&connectPuter()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg> ⬡ Puter</button>
+            <button class="cmd-btn" id="btn-location" title="Enable location access for context-aware responses"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.4 7.05 11.5 7.35 11.76a1 1 0 0 0 1.3 0C12.95 21.5 20 15.4 20 10a8 8 0 0 0-8-8z"/></svg></button>
+            <button class="cmd-btn" id="btn-ocr"><svg class="ic-sm"><use href="#ic-camera"/></svg> OCR</button>
+            <button class="cmd-btn" id="btn-settings"><svg class="ic-sm"><use href="#ic-settings"/></svg> CFG</button>
+            <button class="cmd-btn" id="btn-setup"><svg class="ic-sm"><use href="#ic-wrench"/></svg> SETUP</button>
+            <button class="cmd-btn" id="btn-hooks"><svg class="ic-sm"><use href="#ic-plug"/></svg> HOOKS</button>
+            <button class="cmd-btn" id="btn-services"><svg class="ic-sm"><use href="#ic-chart-bar"/></svg> SVCS</button>
+            <button class="cmd-btn" id="btn-workspace"><svg class="ic-sm"><use href="#ic-folder"/></svg> WS</button>
+            <button class="cmd-btn" id="btn-quota"><svg class="ic-sm"><use href="#ic-dollar"/></svg> QUOTA</button>
+            <button class="cmd-btn" id="btn-canvas" title="Canvas Workbench (Experimental)"><svg class="ic-sm"><use href="#ic-image"/></svg> CANVAS <sup class="exp-sup">β</sup></button>
+            <button class="cmd-btn" id="btn-ascii" title="ASCII 3D Renderer (Experimental)"><svg class="ic-sm"><use href="#ic-cube"/></svg> ASCII <sup class="exp-sup">β</sup></button>
+            <button class="cmd-btn" id="btn-export"><svg class="ic-sm"><use href="#ic-download"/></svg> SAVE</button>
+        </div>
+
+        <!-- WORKSPACE STATUS -->
+        <div class="workspace-status" id="workspace-status">
+            <svg class="ic-xs"><use href="#ic-folder"/></svg>
+            <span>Workspace:</span>
+            <span id="workspace-path">Not active</span>
+            <span class="workspace-indicator" id="workspace-indicator"></span>
+        </div>
+
+        <!-- AETHER PANE — Status, Wave, Animations -->
+        <div class="aether-pane" id="aether-pane">
+            <canvas id="aether-wave"></canvas>
+            <div class="ap-left">
+                <div class="ap-status-ring" id="ap-ring">
+                    <svg class="ap-ring-svg" viewBox="0 0 44 44" fill="none">
+                        <circle cx="22" cy="22" r="18" stroke="rgba(0,243,255,0.12)" stroke-width="1.5"/>
+                        <circle cx="22" cy="22" r="18" stroke="#00f3ff" stroke-width="1.5" stroke-dasharray="113" stroke-dashoffset="113" id="ap-ring-arc" stroke-linecap="round"/>
+                    </svg>
+                    <div class="ap-ring-icon" id="ap-ring-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div class="ap-center">
+                <div class="ap-status-text" id="ap-status-text">AETHER READY</div>
+                <div class="ap-sub-text" id="ap-sub-text">Neural Interface v5.15</div>
+                <div class="ap-particles" id="ap-particles"></div>
+            </div>
+            <div class="ap-right">
+                <div class="ap-metrics">
+                    <div class="ap-metric"><span class="ap-metric-label">TEMP</span><span id="temp-display" class="ap-metric-val">0.1</span></div>
+                    <div class="ap-metric"><span class="ap-metric-label">TPS</span><span id="tps-display" class="ap-metric-val ap-tps">—</span></div>
+                    <div class="ap-metric"><span id="latency-display" class="ap-metric-val" style="font-size:.55rem;color:#223344">—</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CHAT (flex row wrapper for side-by-side chat + tree) -->
+        <div class="chat-row" id="chat-row">
+        <div id="chat-display" class="console-output"></div>
+        <!-- File tree panel (coding mode, desktop only) -->
+        <div id="coding-file-tree" class="coding-file-tree" style="display:none">
+            <div class="coding-tree-header">
+                <span class="coding-tree-title"><svg class="ic-xs"><use href="#ic-folder"/></svg> <span id="coding-tree-label">Project</span></span>
+                <button class="coding-tree-refresh" id="coding-tree-refresh" title="Refresh tree"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
+            </div>
+            <div class="coding-tree-body" id="coding-tree-body">
+                <div class="coding-tree-loading">Loading…</div>
+            </div>
+        </div>
+        </div>
+
+        <!-- CODING TERMINAL PANEL (collapsible, coding mode only) -->
+        <div class="coding-terminal" id="coding-terminal" style="display:none">
+            <div class="coding-terminal-header">
+                <span class="coding-terminal-title"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg> TERMINAL <span id="coding-terminal-cwd" class="coding-terminal-cwd">~/project</span></span>
+                <div class="coding-terminal-actions">
+                    <button class="coding-terminal-clear" id="coding-terminal-clear" title="Clear">✕</button>
+                    <button class="coding-terminal-minmax" id="coding-terminal-minmax" title="Minimize">─</button>
+                </div>
+            </div>
+            <div class="coding-terminal-body" id="coding-terminal-body">
+                <div class="coding-terminal-welcome">AETHER Code Shell — type commands or click files to see content</div>
+            </div>
+            <div class="coding-terminal-input-row">
+                <span class="coding-terminal-prompt" id="coding-terminal-prompt">$</span>
+                <input type="text" class="coding-terminal-input" id="coding-terminal-input" placeholder="ls, cat, grep, tree…" spellcheck="false" autocomplete="off">
+            </div>
+        </div>
+
+        <!-- INPUT DECK -->
+        <div class="input-deck">
+            <div class="ocr-upload-zone hidden" id="ocr-upload-zone">
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-icon"><svg class="ic-xl"><use href="#ic-camera"/></svg></div>
+                    <div class="upload-text"><strong>DROP IMAGE HERE</strong><span>or click to browse</span></div>
+                    <div class="upload-formats">PNG · JPG · JPEG · WebP · BMP</div>
+                    <input type="file" id="file-input" accept="image/*" hidden>
+                </div>
+                <button class="close-ocr-btn" id="close-ocr-btn"><svg class="ic-xs"><use href="#ic-x"/></svg> Close</button>
+            </div>
+
+            <div class="ocr-status hidden" id="ocr-status">
+                <div class="ocr-progress">
+                    <div class="ocr-stage-info">
+                        <span class="stage-label"><svg class="ic-xs"><use href="#ic-brain"/></svg> OCR Processing</span>
+                        <span id="ocr-confidence" class="ocr-confidence">0%</span>
+                    </div>
+                    <div class="progress-bar"><div class="progress-fill" id="ocr-progress-fill"></div></div>
+                    <div class="progress-text" id="ocr-progress-text">Initializing...</div>
+                </div>
+            </div>
+
+            <div class="image-preview hidden" id="image-preview">
+                <div class="preview-header">
+                    <svg class="ic-xs"><use href="#ic-paperclip"/></svg><span>Image (OCR)</span>
+                    <div class="preview-actions">
+                        <button class="icon-btn preview-minimize" id="minimize-preview"><svg class="ic-xs"><use href="#ic-minimize"/></svg></button>
+                        <button class="icon-btn preview-remove" id="preview-remove"><svg class="ic-xs"><use href="#ic-x"/></svg></button>
+                    </div>
+                </div>
+                <div class="preview-image-container"><img id="preview-image" alt="OCR source"></div>
+                <div class="preview-info" id="preview-info">Ready</div>
+            </div>
+
+            <div class="vision-image-preview hidden" id="vision-image-preview">
+                <div class="preview-header">
+                    <svg class="ic-xs"><use href="#ic-image"/></svg><span>Vision Image → AI</span>
+                    <div class="preview-actions">
+                        <button class="icon-btn preview-minimize" id="vision-minimize-preview"><svg class="ic-xs"><use href="#ic-minimize"/></svg></button>
+                        <button class="icon-btn preview-remove" id="vision-preview-remove"><svg class="ic-xs"><use href="#ic-x"/></svg></button>
+                    </div>
+                </div>
+                <div class="preview-image-container"><img id="vision-preview-image" alt="Vision"></div>
+                <div class="preview-info" id="vision-preview-info">Ready to send</div>
+            </div>
+
+            <div id="attach-menu" class="attach-menu hidden">
+                <button id="attach-image" class="attach-menu-item"><svg class="ic-xs"><use href="#ic-camera"/></svg> Image (OCR)</button>
+                <button id="attach-document" class="attach-menu-item"><svg class="ic-xs"><use href="#ic-file"/></svg> Document (RAG)</button>
+                <button id="attach-zip" class="attach-menu-item">
+                    <svg class="ic-xs" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 10V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l2-1.14"/>
+                        <path d="M16.5 9.4 7.55 4.24"/><line x1="19" y1="14" x2="19" y2="22"/><line x1="15" y1="18" x2="23" y2="18"/>
+                    </svg> Unzip File
+                </button>
+                <button id="attach-scrape" class="attach-menu-item"><svg class="ic-xs"><use href="#ic-globe"/></svg> Web Scraper</button>
+            </div>
+
+            <div class="input-wrapper">
+                <!-- IMAGE GRID -->
+                <div id="image-attach-grid" class="image-attach-grid" style="display:none"></div>
+                <div class="input-row-v2">
+                    <!-- + expand menu -->
+                    <div class="input-plus-wrap">
+                        <button class="input-plus-btn" id="input-plus-btn" title="Attach &amp; tools" onclick="document.getElementById('input-plus-menu').classList.toggle('hidden')">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        </button>
+                        <div id="input-plus-menu" class="input-plus-menu hidden">
+                            <button id="image-btn" class="plus-menu-item" title="Attach images" style="position:relative">
+                                <svg class="ic-xs"><use href="#ic-image"/></svg> Images
+                                <span id="img-count-badge" class="img-count-badge" style="display:none"></span>
+                            </button>
+                            <input type="file" id="image-btn-input" accept="image/*" multiple hidden>
+                            <button id="attach-btn" class="plus-menu-item" title="Attach document">
+                                <svg class="ic-xs"><use href="#ic-paperclip"/></svg> Document
+                            </button>
+                            <button id="attach-scrape-inline" class="plus-menu-item" onclick="document.getElementById('input-plus-menu').classList.add('hidden'); document.getElementById('attach-scrape')?.click()">
+                                <svg class="ic-xs"><use href="#ic-globe"/></svg> Scrape URL
+                            </button>
+                            <button id="attach-fs-file" class="plus-menu-item" title="Pick file from linked folder or file system">
+                                <svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> From Folder
+                            </button>
+                            <button id="stt-btn" class="plus-menu-item action-control-btn stt-btn" title="Voice input">
+                                <svg class="ic-xs"><use href="#ic-mic"/></svg> Voice
+                            </button>
+                        </div>
+                    </div>
+                    <!-- Textarea — full width -->
+                    <textarea id="user-input" placeholder="Message AETHER…" rows="1" autocomplete="off" spellcheck="true"></textarea>
+                    <!-- Stop (always present, visible when generating) -->
+                    <button id="stop-btn" class="stop-btn-v2" title="Stop generation" style="display:none">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+                    </button>
+                    <!-- Send button — cyan pill -->
+                    <button id="send-btn" class="send-btn-v2">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="input-footer">
+                <div class="input-info">
+                    <span id="char-counter" class="char-count">0 chars</span>
+                    <span id="dual-chat-indicator" class="dual-chat-indicator"></span>
+                    <span id="md-log-badge" class="md-log-badge" style="display:none" onclick="toggleMDDebug()" title="Markdown render issues">⚠ MD</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Markdown Debug Viewer -->
+    <div id="md-debug-overlay" class="md-debug-overlay hidden" onclick="if(event.target===this)this.classList.add('hidden')">
+        <div class="md-debug-panel">
+            <div class="md-debug-header">
+                <span>Markdown Render Log</span>
+                <div>
+                    <button onclick="window._clearMDLog?.();toggleMDDebug()" style="background:none;border:none;color:#3a5060;cursor:pointer;font-size:.6rem">Clear</button>
+                    <button onclick="document.getElementById('md-debug-overlay').classList.add('hidden')" style="background:none;border:none;color:#3a5060;cursor:pointer;font-size:.6rem">✕</button>
+                </div>
+            </div>
+            <div class="md-debug-body" id="md-debug-body">No entries.</div>
+        </div>
+    </div>
+
+    <script>
+    function toggleMDDebug() {
+        var o = document.getElementById('md-debug-overlay');
+        if (!o) return;
+        o.classList.toggle('hidden');
+        if (!o.classList.contains('hidden')) {
+            var body = document.getElementById('md-debug-body');
+            if (body) {
+                var log = typeof window._getMDLog === 'function' ? window._getMDLog() : [];
+                if (!log.length) { body.innerHTML = '<div class="md-debug-empty">No render issues logged.</div>'; return; }
+                body.innerHTML = log.map(function(e) {
+                    var color = e.level === 'error' ? '#e06060' : e.level === 'warn' ? '#ffd700' : '#4a7a8a';
+                    return '<div class="md-debug-entry"><span style="color:'+color+';font-weight:600">['+e.level.toUpperCase()+']</span> '
+                        + '<span style="color:#6a8898;font-size:.55rem">'+new Date(e.ts).toLocaleTimeString()+'</span> '
+                        + '<span>'+escapeHtml(e.msg)+'</span>'
+                        + (e.detail ? '<div style="color:#3a5060;font-size:.6rem;padding-left:12px;margin-top:2px">'+escapeHtml(e.detail)+'</div>' : '')
+                        + '</div>';
+                }).join('');
+            }
+        }
+    }
+    </script>
+</div>
+
+<!-- AGENT STATUS BAR — floats above input, shows during tool/web ops -->
+<div id="agent-status-bar" class="agent-status-bar hidden">
+    <div class="agent-status-pulse"></div>
+    <span id="agent-status-icon" class="agent-status-icon"></span>
+    <span id="agent-status-text" class="agent-status-text">Working…</span>
+    <div class="agent-status-dots"><span></span><span></span><span></span></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 4: MODALS
+  Every dialog window in the app. They all follow the same
+  pattern: overlay + content + header with close button + body.
+  To add a new modal:
+  1. Copy any existing modal block below
+  2. Change the ID (e.g., "my-modal")
+  3. Add a button that removes the "hidden" class
+  4. Add a close button that adds the "hidden" class
+  5. Wire it up in script.js event listeners
+  It's not fancy, but it works. And working is better than fancy.
+  ═══════════════════════════════════════════════════════════ -->
+<!-- ═══════ MODALS ═══════ -->
+
+<!-- ═══ SETTINGS: Temperature, Top-K, CoT, RAG, Streaming, Soul, Agent ═══ -->
+<div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal-content settings-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-settings"/></svg> AI CONFIGURATION</h3><button class="icon-btn modal-close" id="settings-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-target"/></svg> PRECISION INFERENCE</h4>
+                <div class="setting-item">
+                    <label>Temperature: <span id="temp-value" class="value-display">0.1</span></label>
+                    <div class="custom-slider-container">
+                        <div class="custom-slider" id="temperature-slider-custom">
+                            <div class="slider-track"><div class="slider-fill" style="width:10%"></div></div>
+                            <div class="slider-thumb" style="left:10%"></div>
+                        </div>
+                        <input type="range" id="temperature-slider" min="0" max="1" step="0.05" value="0.1" class="hidden-slider">
+                    </div>
+                    <div class="setting-hint">Lower = Focused · Higher = Creative</div>
+                </div>
+                <div class="setting-item">
+                    <label>Top_K: <span id="topk-value" class="value-display">40</span></label>
+                    <input type="number" id="topk-input" min="1" max="200" value="40">
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-brain"/></svg> CHAIN-OF-THOUGHT</h4>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="cot-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">Enable CoT Reasoning</span></label></div>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="show-thoughts-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">Display Thought Process</span></label></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-layers"/></svg> RETRIEVAL (RAG)</h4>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="rag-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">BM25 Keyword Memory</span></label></div>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="vector-toggle"><span class="toggle-slider"></span><span class="toggle-text">Vector RAG (Semantic)</span></label></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-zap"/></svg> STREAMING</h4>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="streaming-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">Stream Responses</span></label></div>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="blurin-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">Per-Word Blur-In Effect</span></label><div class="setting-hint">Smooth word-by-word reveal masks token chunk stutter</div></div>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="metrics-toggle"><span class="toggle-slider"></span><span class="toggle-text">Show TTFT / TPS Metrics</span></label><div class="setting-hint">Display time-to-first-token and tokens/sec in status bar</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-brain"/></svg> SOUL & REFLECTION</h4>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="reflection-toggle" checked><span class="toggle-slider"></span><span class="toggle-text">Self-Reflection Engine</span></label><div class="setting-hint">AETHER analyses conversations to learn about you and improve</div></div>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="proactive-toggle"><span class="toggle-slider"></span><span class="toggle-text">Proactive Check-Ins</span></label><div class="setting-hint">AETHER sends autonomous messages based on conversation patterns (opt-in)</div></div>
+                <div class="setting-item">
+                    <label>Reflection Frequency</label>
+                    <select id="reflection-freq-select" style="width:100%;background:#0a0a0a;border:1px solid #333;color:var(--neon-cyan);padding:8px;font-family:var(--font-mono);font-size:0.75rem;border-radius:2px;">
+                        <option value="30">Every 30 min (frequent)</option>
+                        <option value="60">Every 60 min (moderate)</option>
+                        <option value="90" selected>Every 90 min (balanced)</option>
+                        <option value="180">Every 3 hours (conservative)</option>
+                        <option value="360">Every 6 hours (minimal)</option>
+                    </select>
+                    <div class="setting-hint">How often AETHER reflects during active use</div>
+                </div>
+                <div class="setting-item"><button class="cmd-btn" id="view-soul-btn" style="width:100%"><svg class="ic-xs"><use href="#ic-atom"/></svg> VIEW AETHER SOUL</button><div class="setting-hint">See what AETHER has learned about itself and you</div></div>
+                <div class="setting-item"><span id="reflection-cost-display" style="font-size:0.7rem;color:var(--text-dim);">Reflection cost: 0 tokens</span></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-target"/></svg> AGENT BEHAVIOR</h4>
+                <div class="setting-item">
+                    <label>Agent Detection</label>
+                    <select id="agent-mode-select" style="width:100%;background:#0a0a0a;border:1px solid #333;color:var(--neon-cyan);padding:8px;font-family:var(--font-mono);font-size:0.75rem;border-radius:2px;">
+                        <option value="auto">Auto-detect & ask (recommended)</option>
+                        <option value="ask">Always ask before agent mode</option>
+                        <option value="off">Off — use AGENT button only</option>
+                    </select>
+                    <div class="setting-hint">When enabled, AETHER detects multi-step tasks and offers autonomous execution</div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-lock"/></svg> SECURITY</h4>
+                <div class="setting-item"><button class="cmd-btn" id="change-password-btn" style="width:100%"><svg class="ic-xs"><use href="#ic-key"/></svg> CHANGE ENCRYPTION KEY</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ SETUP: API provider, endpoint, model, auth configuration ═══ -->
+<div id="setup-modal" class="modal-overlay hidden">
+    <div class="modal-content setup-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-wrench"/></svg> API CONFIGURATION</h3><button class="icon-btn modal-close" id="setup-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-plug"/></svg> PROVIDER</h4>
+                <div class="provider-grid" id="provider-grid"><!-- rendered by JS --></div>
+                <input type="hidden" id="provider-select" value="local">
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-globe"/></svg> ENDPOINT</h4>
+                <div class="setting-item"><label>API URL</label><input type="url" id="endpoint-input" placeholder="http://localhost:8080/v1/chat/completions" value="http://localhost:8080/v1/chat/completions"><div class="setting-hint">Auto-filled from provider</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-key"/></svg> AUTHENTICATION</h4>
+                <div class="setting-item"><label>API Key</label><input type="password" id="api-key-input" placeholder="sk-..."><div class="setting-hint">AES-256-GCM encrypted</div></div>
+                <div class="setting-item"><label>Custom Auth Header</label><input type="text" id="auth-header-input" placeholder="Authorization: Bearer <key>"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-cpu"/></svg> MODEL</h4>
+                <div class="setting-item"><label>Model Name</label><input type="text" id="model-input" placeholder="e.g. qwen3.5-9b-instruct" value="gpt-3.5-turbo"></div>
+                <div class="model-chips" id="model-chips"></div>
+            </div>
+            <div class="settings-footer">
+                <button class="save-settings-btn" id="save-setup">SAVE CONFIG</button>
+                <button class="reset-default-btn" id="reset-setup">RESET</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ HOOKS: External service API keys (Gmail, Slack, Notion, Jira, etc.) ═══ -->
+<div id="hooks-modal" class="modal-overlay hidden">
+    <div class="modal-content hooks-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-plug"/></svg> EXTERNAL HOOKS</h3><button class="icon-btn modal-close" id="hooks-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-mail"/></svg> MAIL</h4>
+                <div class="setting-item"><label>Gmail API Key</label><input type="password" id="gmail-key" placeholder="Gmail key"></div>
+                <div class="setting-item"><label>Outlook API Key</label><input type="password" id="outlook-key" placeholder="Outlook key"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-search"/></svg> SEARCH</h4>
+                <div class="setting-item"><label>Tavily API Key</label><input type="password" id="tavily-key" placeholder="Tavily key"></div>
+                <div class="setting-item"><label>Brave Search Key</label><input type="password" id="brave-key" placeholder="Brave key"></div>
+                <div class="setting-item"><label>Serper.dev Key</label><input type="password" id="serper-key" placeholder="Serper key"></div>
+            </div>
+            <!-- ── X / Twitter Search ──────────────────────────── -->
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.26 5.632zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg> X / TWITTER SEARCH</h4>
+                <div class="setting-item">
+                    <label>Bearer Token</label>
+                    <input type="password" id="x-bearer-token" placeholder="Bearer token from developer.twitter.com">
+                    <div class="setting-hint">X API v2 Bearer token — enables tweet search, user lookup, and timeline tools. Free tier: 500k reads/month.</div>
+                </div>
+                <div class="setting-item">
+                    <label>Search Mode</label>
+                    <select id="x-search-mode" class="settings-select">
+                        <option value="recent">Recent (last 7 days — free tier)</option>
+                        <option value="all">Full archive (Academic/Pro)</option>
+                    </select>
+                </div>
+            </div>
+            <!-- ── Trello ──────────────────────────────────────── -->
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="currentColor"><rect x="2.5" y="2.5" width="8.5" height="19" rx="1.5"/><rect x="13" y="2.5" width="8.5" height="12" rx="1.5"/></svg> TRELLO</h4>
+                <div class="setting-item">
+                    <label>API Key</label>
+                    <input type="password" id="trello-api-key" placeholder="trello.com/1/apiKey">
+                    <div class="setting-hint">Get your key at <strong>trello.com/power-ups/admin</strong> → API Key.</div>
+                </div>
+                <div class="setting-item">
+                    <label>Token</label>
+                    <input type="password" id="trello-token" placeholder="Trello OAuth token">
+                    <div class="setting-hint">After getting your API key, generate a token for AETHER to read/write your boards.</div>
+                </div>
+                <div class="setting-item">
+                    <label>Default Board ID (optional)</label>
+                    <input type="text" id="trello-board-id" placeholder="Board ID from board URL">
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-globe"/></svg> WEB SCRAPING</h4>
+                <div class="setting-item"><label>Puter API Key</label><input type="password" id="puter-key" placeholder="Puter key"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-github"/></svg> GITHUB</h4>
+                <div class="setting-item"><label>GitHub Token</label><input type="password" id="github-token" placeholder="ghp_..."></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-signal"/></svg> WEATHER</h4>
+                <div class="setting-item"><label>OpenWeatherMap API Key</label><input type="password" id="weather-key" placeholder="OWM key (free tier works)"></div>
+                <div class="setting-item"><label>Default Location</label><input type="text" id="weather-location" placeholder="e.g. London, UK"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-layers"/></svg> SLACK</h4>
+                <div class="setting-item"><label>Slack Bot Token</label><input type="password" id="slack-token" placeholder="xoxb-..."></div>
+                <div class="setting-item"><label>Default Channel</label><input type="text" id="slack-channel" placeholder="#general"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-file"/></svg> NOTION</h4>
+                <div class="setting-item"><label>Notion Integration Token</label><input type="password" id="notion-token" placeholder="secret_..."></div>
+                <div class="setting-item"><label>Default Database ID</label><input type="text" id="notion-db" placeholder="Database ID"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-zap"/></svg> PHILIPS HUE</h4>
+                <div class="setting-item"><label>Bridge IP / Hostname</label><input type="text" id="hue-host" placeholder="192.168.x.x"></div>
+                <div class="setting-item"><label>Application Key</label><input type="password" id="hue-key" placeholder="Hue app key"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-target"/></svg> JIRA</h4>
+                <div class="setting-item"><label>Jira Cloud URL</label><input type="text" id="jira-url" placeholder="https://your-org.atlassian.net"></div>
+                <div class="setting-item"><label>Email</label><input type="email" id="jira-email" placeholder="you@company.com"></div>
+                <div class="setting-item"><label>API Token</label><input type="password" id="jira-token" placeholder="Jira API token"></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-layers"/></svg> GITLAB</h4>
+                <div class="setting-item"><label>GitLab Instance URL</label><input type="text" id="gitlab-url" placeholder="https://gitlab.com"></div>
+                <div class="setting-item"><label>Personal Access Token</label><input type="password" id="gitlab-token" placeholder="glpat-..."></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-globe"/></svg> GOOGLE WORKSPACE</h4>
+                <div class="setting-item"><label>OAuth Access Token</label><input type="password" id="google-token" placeholder="ya29..."></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-building"/></svg> MICROSOFT 365</h4>
+                <div class="setting-item"><label>Access Token</label><input type="password" id="ms-token" placeholder="eyJ..."></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg> BROWSER AUTOMATION (Power User)</h4>
+                <div class="setting-hint" style="margin-bottom:8px">Requires local Python backend. Run: <code style="font-family:monospace;background:#03040a;padding:1px 5px;border-radius:3px;color:#a0d0f0">pip install browser-use playwright && uvicorn aether_browser_agent:app --port 7860</code></div>
+                <div class="setting-item"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="browser-agent-enabled"> Enable Browser Automation</label></div>
+                <div class="setting-item">
+                    <label>Engine</label>
+                    <select id="browser-agent-engine" class="settings-select">
+                        <option value="browser-use">Browser Use (AI-native)</option>
+                        <option value="playwright">Playwright (scripted)</option>
+                        <option value="selenium">Selenium (legacy)</option>
+                    </select>
+                </div>
+                <div class="setting-item"><label>Backend URL</label><input type="text" id="browser-agent-url" placeholder="http://localhost:7860"><div class="setting-hint">Local aether_browser_agent server URL</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-mic"/></svg> SPEECH-TO-TEXT (STT)</h4>
+                <div class="setting-item">
+                    <label>STT Engine</label>
+                    <select id="stt-engine-select" class="settings-select">
+                        <option value="none">None (disabled)</option>
+                        <option value="browser">Browser Web Speech API (free)</option>
+                        <option value="whisper">OpenAI Whisper API</option>
+                        <option value="whisper-cpp">Whisper.cpp (local server)</option>
+                        <option value="google">Google Cloud Speech-to-Text</option>
+                        <option value="vosk">Vosk (local server)</option>
+                    </select>
+                </div>
+                <div class="setting-item"><label>OpenAI Whisper Key</label><input type="password" id="stt-whisper-key" placeholder="sk-... (for OpenAI Whisper)"></div>
+                <div class="setting-item"><label>Whisper.cpp URL</label><input type="text" id="stt-whisper-cpp-url" placeholder="http://localhost:9000"></div>
+                <div class="setting-item"><label>Google Cloud Key</label><input type="password" id="stt-google-key" placeholder="Google Cloud Speech API key"></div>
+                <div class="setting-item"><label>Vosk Server URL</label><input type="text" id="stt-vosk-url" placeholder="http://localhost:2700"></div>
+                <div class="setting-item"><label>Language Code</label><input type="text" id="stt-language" placeholder="en-US" value="en-US"><div class="setting-hint">e.g. en-US, fr-FR, zh-CN, ar-SA</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-flame"/></svg> FIRECRAWL</h4>
+                <div class="setting-item"><label>Firecrawl API Key</label><input type="password" id="firecrawl-key" placeholder="fc-..."><div class="setting-hint">firecrawl.dev — web scraping &amp; deep crawling</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-signal"/></svg> TTS ENGINE</h4>
+                <div class="setting-item">
+                    <label>Engine</label>
+                    <select id="tts-engine" class="settings-select">
+                        <option value="none">None (disabled)</option>
+                        <option value="browser">Browser Speech API</option>
+                        <option value="kokoro">Kokoro 82M (on-device)</option>
+                        <option value="piper">Piper (local server)</option>
+                    </select>
+                </div>
+                <div class="setting-item"><label>Piper Server URL</label><input type="text" id="tts-piper-url" placeholder="http://localhost:5000/tts"></div>
+                <div class="setting-item"><label>Voice ID</label><input type="text" id="tts-voice" placeholder="af_heart (Kokoro) or en_US/vctk (Piper)"></div>
+                <div class="setting-item"><label>Speed <span id="tts-speed-val">1.0×</span></label><input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0" oninput="document.getElementById('tts-speed-val').textContent=this.value+'×'"><div class="setting-hint">0.5 – 2.0×</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> IMAGE &amp; VIDEO GENERATION</h4>
+                <div class="setting-item"><label>FLUX.2 API Key (Black Forest Labs)</label><input type="password" id="flux-key" placeholder="BFL API key — api.bfl.ml"><div class="setting-hint">FLUX.2 Pro/Dev/Schnell image generation</div></div>
+                <div class="setting-item"><label>SiliconFlow API Key (FLUX via SF)</label><input type="password" id="siliconflow-flux-key" placeholder="SiliconFlow API key for FLUX.2"><div class="setting-hint">Cost-effective FLUX.2 via SiliconFlow</div></div>
+                <div class="setting-item"><label>OpenAI DALL-E Key</label><input type="password" id="dalle-key" placeholder="sk-... (for DALL-E 3)"><div class="setting-hint">OpenAI DALL-E 3 image generation</div></div>
+                <div class="setting-item"><label>Google Imagen / Veo Key</label><input type="password" id="imagen-key" placeholder="Google Cloud API key for Imagen 3 / Veo"><div class="setting-hint">Imagen 3 (image) · Veo 2/3 (video) via Vertex AI</div></div>
+                <div class="setting-item"><label>Nano Banana API Key</label><input type="password" id="nano-banana-key" placeholder="Nano Banana API key"><div class="setting-hint">Lightweight edge AI model</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> CLOUD PLATFORMS &amp; SVCS</h4>
+                <div class="setting-hint" style="margin-bottom:8px">Vercel, Firebase, Supabase, and Oracle Cloud — for deployment, edge functions, and VPS integration.</div>
+                <div class="setting-item"><label>Vercel API Token</label><input type="password" id="vercel-token" placeholder="Bearer token from vercel.com/account/tokens"><div class="setting-hint">Deploy to Vercel Edge Network</div></div>
+                <div class="setting-item"><label>Firebase / Google Cloud Key</label><input type="password" id="firebase-key" placeholder="Firebase project API key"><div class="setting-hint">Vertex AI, Gemini via Firebase ML</div></div>
+                <div class="setting-item"><label>Supabase URL</label><input type="text" id="supabase-url" placeholder="https://xyz.supabase.co"><div class="setting-hint">Supabase project URL</div></div>
+                <div class="setting-item"><label>Supabase Anon Key</label><input type="password" id="supabase-key" placeholder="supabase anon key"></div>
+                <div class="setting-item"><label>Oracle Cloud API Key</label><input type="password" id="oracle-key" placeholder="OCI API key"><div class="setting-hint">Oracle Generative AI / VPS access</div></div>
+                <div class="setting-item"><label>Oracle Compartment ID</label><input type="text" id="oracle-compartment" placeholder="ocid1.compartment.oc1..."></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg> VIDEO &amp; VISION APIs</h4>
+                <div class="setting-item"><label>Veo API Key (Google)</label><input type="password" id="veo-key" placeholder="Google Cloud API key for Veo video generation"><div class="setting-hint">Veo 2/3 video generation via Vertex AI</div></div>
+                <div class="setting-item"><label>Moondream API Key</label><input type="password" id="moondream-key" placeholder="moondream.ai API key"><div class="setting-hint">Moondream2 2B vision model — fast, on-device capable</div></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> PISTON CODE RUNNER</h4>
+                <div class="setting-item"><label>Piston API URL</label><input type="text" id="piston-url" placeholder="https://emkc.org/api/v2/piston (default)" value="https://emkc.org/api/v2/piston"><div class="setting-hint">Public Piston instance or self-hosted. Powers the Run button in code blocks.</div></div>
+            </div>
+            <div class="settings-footer"><button class="save-settings-btn" id="save-hooks">SAVE HOOKS</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ SERVICES: Status dashboard for all configured integrations ═══ -->
+<div id="services-modal" class="modal-overlay hidden">
+    <div class="modal-content services-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-chart-bar"/></svg> SERVICES</h3><button class="icon-btn modal-close" id="services-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="settings-section"><h4>API</h4>
+                <div class="service-item"><span>Provider:</span><span id="service-provider" class="service-status">local</span></div>
+                <div class="service-item"><span>Model:</span><span id="service-model" class="service-status">gpt-3.5-turbo</span></div>
+                <div class="service-item context-limit-row">
+                    <span>Context limit:</span>
+                    <span id="service-context-limit" class="service-status">auto</span>
+                    <input type="number" id="ctx-limit-override" class="ctx-limit-input" placeholder="auto" min="512" max="2000000" title="Override context window (tokens). Leave blank for auto.">
+                    <button class="ctx-limit-set" id="ctx-limit-btn" title="Apply">SET</button>
+                </div>
+            </div>
+            <div class="settings-section"><h4><svg class="ic-xs"><use href="#ic-mail"/></svg> MAIL</h4>
+                <div class="service-item"><span>Gmail:</span><span id="service-gmail" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Outlook:</span><span id="service-outlook" class="service-status">Not configured</span></div>
+            </div>
+            <div class="settings-section"><h4><svg class="ic-xs"><use href="#ic-search"/></svg> SEARCH</h4>
+                <div class="service-item"><span>Tavily:</span><span id="service-tavily" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Brave:</span><span id="service-brave" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Serper:</span><span id="service-serper" class="service-status">Not configured</span></div>
+            </div>
+            <div class="settings-section"><h4>WEB / GITHUB</h4>
+                <div class="service-item"><span>Puter:</span><span id="service-puter" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>GitHub:</span><span id="service-github" class="service-status">Not configured</span></div>
+            </div>
+            <div class="settings-section"><h4><svg class="ic-xs"><use href="#ic-signal"/></svg> WEATHER / COMMS</h4>
+                <div class="service-item"><span>Weather:</span><span id="service-weather" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Slack:</span><span id="service-slack" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Notion:</span><span id="service-notion" class="service-status">Not configured</span></div>
+            </div>
+            <div class="settings-section"><h4><svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.26 5.632zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg> PRODUCTIVITY</h4>
+                <div class="service-item"><span>X / Twitter:</span><span id="service-x" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>Trello:</span><span id="service-trello" class="service-status">Not configured</span></div>
+                <div class="service-item"><span>File System:</span><span id="service-fs" class="service-status">Not linked</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ WORKSPACE: Persistent file memory (AETHER.md, USER.md, etc.) ═══ -->
+<div id="workspace-modal" class="modal-overlay hidden">
+    <div class="modal-content workspace-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-folder"/></svg> WORKSPACE</h3><button class="icon-btn modal-close" id="workspace-modal-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <!-- Step 1: Choose mode -->
+            <div id="ws-choose" class="ws-section">
+                <p class="ws-description">Workspace provides AETHER with persistent memory files (CORE_LOGIC.md, USER.md, WORKSPACE.md…) that augment every prompt with your context.</p>
+                <div class="ws-options">
+                    <button class="ws-option-btn" id="ws-fs-btn">
+                        <svg class="ic-lg"><use href="#ic-folder"/></svg>
+                        <div class="ws-option-info"><strong>File System</strong><span>Real folder on disk. Requires Chrome/Edge on HTTPS or localhost.</span></div>
+                    </button>
+                    <button class="ws-option-btn" id="ws-virtual-btn">
+                        <svg class="ic-lg"><use href="#ic-database"/></svg>
+                        <div class="ws-option-info"><strong>Virtual (IndexedDB)</strong><span>Stored in browser. Works on all browsers.</span></div>
+                    </button>
+                </div>
+            </div>
+            <!-- Step 2: Active -->
+            <div id="ws-active" class="ws-section" style="display:none">
+                <div class="settings-section"><h4><svg class="ic-xs"><use href="#ic-check"/></svg> ACTIVE WORKSPACE</h4>
+                    <div class="service-item"><span>Mode:</span><span id="ws-mode-text" class="service-status configured">—</span></div>
+                    <div class="service-item"><span>Path:</span><span id="ws-path-text" class="service-status">—</span></div>
+                    <div class="service-item"><span>Files:</span><span id="ws-files-text" class="service-status">—</span></div>
+                </div>
+                <div class="settings-footer">
+                    <button class="save-settings-btn" id="ws-view-btn"><svg class="ic-xs"><use href="#ic-eye"/></svg> VIEW FILES</button>
+                    <button class="save-settings-btn" id="ws-project-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> PROJECTS</button>
+                    <button class="save-settings-btn" id="ws-import-btn"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg> IMPORT FROM AI</button>
+                    <button class="reset-default-btn" id="ws-disconnect-btn"><svg class="ic-xs"><use href="#ic-x"/></svg> DISCONNECT</button>
+                </div>
+            </div>
+            <!-- Step 3: File viewer -->
+            <div id="ws-files" class="ws-section" style="display:none">
+                <div class="settings-section"><h4><svg class="ic-xs"><use href="#ic-file"/></svg> WORKSPACE FILES</h4>
+                    <div id="ws-files-list" class="ws-files-list"></div>
+                </div>
+                <div class="settings-footer"><button class="reset-default-btn" id="ws-back-btn">← BACK</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ TEXT EDITOR MODAL ═══ -->
+<div id="ws-editor-modal" class="modal-overlay hidden">
+    <div class="modal-content ws-editor-modal-content">
+        <div class="modal-header">
+            <div class="ws-editor-title">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                <span id="ws-editor-filename">Untitled</span>
+                <span id="ws-editor-dirty" class="ws-editor-dirty" style="display:none">●</span>
+            </div>
+            <div class="ws-editor-toolbar">
+                <button class="ws-editor-tb-btn" id="ws-editor-save"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Save</button>
+                <button class="ws-editor-tb-btn" id="ws-editor-inject"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send to AI</button>
+                <button class="ws-editor-tb-btn" id="ws-editor-wrap">Wrap</button>
+                <button class="icon-btn modal-close" id="ws-editor-close"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </div>
+        </div>
+        <div class="ws-editor-meta">
+            <span id="ws-editor-lines">0 lines</span>
+            <span id="ws-editor-chars">0 chars</span>
+            <span id="ws-editor-cursor">Ln 1, Col 1</span>
+        </div>
+        <textarea id="ws-editor-textarea" class="ws-editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    </div>
+</div>
+
+<!-- ═══ PROJECT MODAL ═══ -->
+<div id="project-modal" class="modal-overlay hidden">
+    <div class="modal-content project-modal-content">
+        <div class="modal-header">
+            <h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> PROJECTS</h3>
+            <button class="icon-btn modal-close" id="project-modal-close"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-body" id="project-modal-body"></div>
+    </div>
+</div>
+
+<!-- ═══ AI IMPORT MODAL ═══ -->
+<div id="ai-import-modal" class="modal-overlay hidden">
+    <div class="modal-content ai-import-modal-content">
+        <div class="modal-header">
+            <h3><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg> IMPORT FROM AI</h3>
+            <button class="icon-btn modal-close" id="ai-import-close"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="modal-body">
+            <div id="ai-import-step-1" class="ai-import-step">
+                <p class="ai-import-desc">Transfer your context from ChatGPT, Gemini, Claude, or any AI. Copy the prompt, run it there, then paste the result here.</p>
+                <div class="ai-import-step-label"><span class="ai-import-num">1</span> Copy this prompt into your other AI</div>
+                <div class="ai-import-prompt-wrap">
+                    <pre id="ai-import-prompt-text" class="ai-import-prompt"></pre>
+                    <button class="ai-import-copy-btn" id="ai-import-copy"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy Prompt</button>
+                </div>
+                <div class="ai-import-step-label" style="margin-top:16px"><span class="ai-import-num">2</span> Paste the AI's response here</div>
+                <textarea id="ai-import-paste" class="ai-import-paste" placeholder="Paste the summary from your other AI here…" spellcheck="false"></textarea>
+                <div class="settings-footer" style="margin-top:10px"><button class="save-settings-btn" id="ai-import-process">Import into AETHER</button></div>
+            </div>
+            <div id="ai-import-step-2" class="ai-import-step" style="display:none">
+                <div class="ai-import-success"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#00ff9d" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg><span>Context imported</span></div>
+                <div class="ai-import-preview" id="ai-import-preview"></div>
+                <div class="settings-footer" style="margin-top:10px">
+                    <button class="save-settings-btn" id="ai-import-save-rag">Save to RAG</button>
+                    <button class="save-settings-btn" id="ai-import-save-user">Save to USER.md</button>
+                    <button class="reset-default-btn" id="ai-import-back">← Back</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ QUOTA: API cost tracking and budget enforcement ═══ -->
+<div id="quota-modal" class="modal-overlay hidden">
+    <div class="modal-content quota-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-dollar"/></svg> API QUOTA MANAGER</h3><button class="icon-btn modal-close" id="quota-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-dollar"/></svg> SPENDING LIMIT</h4>
+                <div class="setting-item"><label class="toggle-label"><input type="checkbox" id="quota-enabled-toggle"><span class="toggle-slider"></span><span class="toggle-text">Enforce Quota Limit</span></label><div class="setting-hint">Blocks API calls when limit is reached</div></div>
+                <div class="setting-item"><label>Limit (USD $)</label><input type="number" id="quota-limit-input" min="0.01" step="0.01" value="10.00"></div>
+                <div class="setting-item"><label>Reset Period</label>
+                <select id="quota-reset-select">
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly" selected>Monthly</option>
+                    <option value="never">Never</option>
+                </select></div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-chart-bar"/></svg> USAGE</h4>
+                <div class="quota-display">
+                    <div class="quota-amounts">
+                        <span class="quota-spent" id="quota-spent-display">$0.0000</span>
+                        <span class="quota-separator">/</span>
+                        <span class="quota-limit-lbl" id="quota-limit-display">$10.00</span>
+                    </div>
+                    <div class="quota-bar-container"><div class="quota-bar-fill" id="quota-bar-fill" style="width:0%"></div></div>
+                    <div class="quota-detail">
+                        <span id="quota-tokens-display">0 total tokens</span>
+                        <span id="quota-reset-display">Resets: monthly</span>
+                    </div>
+                    <div class="quota-breakdown">
+                        <div class="quota-row"><span>Input tokens:</span><span id="quota-input-tokens">0</span></div>
+                        <div class="quota-row"><span>Output tokens:</span><span id="quota-output-tokens">0</span></div>
+                        <div class="quota-row"><span>Total cost:</span><span id="quota-session-cost">$0.0000</span></div>
+                    </div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-info"/></svg> PRICING DATABASE (per 1M tokens)</h4>
+                <div class="pricing-table-wrapper">
+                    <table class="pricing-table">
+                        <thead><tr><th>Provider / Model</th><th>Input</th><th>Output</th></tr></thead>
+                        <tbody id="pricing-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="settings-footer">
+                <button class="save-settings-btn" id="quota-save"><svg class="ic-xs"><use href="#ic-check"/></svg> SAVE</button>
+                <button class="reset-default-btn" id="quota-reset-btn"><svg class="ic-xs"><use href="#ic-refresh"/></svg> RESET COUNTER</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ PASSWORD: Encryption key setup ═══ -->
+<div id="password-modal" class="modal-overlay hidden">
+    <div class="modal-content password-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-lock"/></svg> ENCRYPTION</h3><button class="icon-btn modal-close" id="password-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <p id="password-message">Enter password to decrypt saved keys.</p>
+            <div class="setting-item"><label>Password</label><input type="password" id="password-input" placeholder="Password"></div>
+            <div class="setting-item"><label id="confirm-label" style="display:none">Confirm</label><input type="password" id="password-confirm" placeholder="Confirm" style="display:none"></div>
+            <div class="settings-footer">
+                <button class="save-settings-btn" id="password-submit">SUBMIT</button>
+                <button class="reset-default-btn" id="password-clear" style="display:none">CLEAR ALL</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ DIALOG: Custom alert/confirm/prompt replacement ═══ -->
+<div id="dialog-modal" class="modal-overlay hidden">
+    <div class="modal-content dialog-modal-content">
+        <div class="modal-header"><h3 id="dialog-title">AETHER</h3><button class="icon-btn modal-close" id="dialog-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <p id="dialog-message"></p>
+            <div class="setting-item" id="dialog-input-container" style="display:none"><input type="text" id="dialog-input" placeholder="Enter value"></div>
+            <div class="settings-footer"><button class="save-settings-btn" id="dialog-ok">OK</button><button class="reset-default-btn" id="dialog-cancel">Cancel</button></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ CANVAS: Image viewing workbench (Experimental) ═══ -->
+<div id="canvas-modal" class="modal-overlay hidden">
+    <div class="modal-content canvas-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-image"/></svg> CANVAS WORKBENCH <span class="exp-badge">EXPERIMENTAL</span></h3><button class="icon-btn modal-close" id="canvas-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="canvas-upload-area">
+                <button class="cmd-btn" id="canvas-upload"><svg class="ic-xs"><use href="#ic-upload"/></svg> UPLOAD IMAGE / PDF</button>
+                <input type="file" id="canvas-file-input" accept="image/*,application/pdf" hidden>
+            </div>
+            <div class="canvas-container" id="canvas-container" style="display:none">
+                <canvas id="canvas-display"></canvas>
+                <div class="canvas-toolbar">
+                    <button class="cmd-btn canvas-tool" data-tool="rect" title="Rectangle"><svg class="ic-xs"><use href="#ic-layers"/></svg></button>
+                    <button class="cmd-btn canvas-tool" data-tool="arrow" title="Arrow"><svg class="ic-xs"><use href="#ic-send"/></svg></button>
+                    <button class="cmd-btn canvas-tool" data-tool="text" title="Text">T</button>
+                    <button class="cmd-btn canvas-tool" data-tool="freehand" title="Draw"><svg class="ic-xs"><use href="#ic-eye"/></svg></button>
+                    <button class="cmd-btn canvas-tool" data-tool="clear" title="Clear"><svg class="ic-xs"><use href="#ic-trash"/></svg></button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══ ASCII: 3D ASCII art renderer (Experimental) ═══ -->
+<div id="ascii-modal" class="modal-overlay hidden">
+    <div class="modal-content ascii-modal-content">
+        <div class="modal-header"><h3><svg class="ic-sm"><use href="#ic-cube"/></svg> ASCII 3D RENDERER <span class="exp-badge">EXPERIMENTAL</span></h3><button class="icon-btn modal-close" id="ascii-close"><svg class="ic-sm"><use href="#ic-x"/></svg></button></div>
+        <div class="modal-body">
+            <div class="ascii-controls">
+                <div class="ascii-scenes">
+                    <button class="cmd-btn ascii-scene-btn" data-scene="sphere"><svg class="ic-xs"><use href="#ic-circle-filled"/></svg> Sphere</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="torus"><svg class="ic-xs"><use href="#ic-rotate"/></svg> Torus</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="multi"><svg class="ic-xs"><use href="#ic-layers"/></svg> Multi</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="city"><svg class="ic-xs"><use href="#ic-building"/></svg> City</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="robot"><svg class="ic-xs"><use href="#ic-cpu"/></svg> Robot</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="atom"><svg class="ic-xs"><use href="#ic-atom"/></svg> Atom</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="station"><svg class="ic-xs"><use href="#ic-zap"/></svg> Station</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="crystal"><svg class="ic-xs"><use href="#ic-crystal"/></svg> Crystal</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="solar"><svg class="ic-xs"><use href="#ic-atom"/></svg> Solar</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="galaxy"><svg class="ic-xs"><use href="#ic-atom"/></svg> Galaxy</button>
+                    <button class="cmd-btn ascii-scene-btn" data-scene="terrain"><svg class="ic-xs"><use href="#ic-building"/></svg> Terrain</button>
+                </div>
+                <div class="ascii-options">
+                    <button class="cmd-btn" id="ascii-anim-btn"><svg class="ic-xs"><use href="#ic-play"/></svg> Animate</button>
+                    <button class="cmd-btn" id="ascii-canvas-btn"><svg class="ic-xs"><use href="#ic-target"/></svg> Canvas</button>
+                    <label class="ascii-sz">W:<input type="number" id="ascii-width" value="90" min="40" max="160"></label>
+                    <label class="ascii-sz">H:<input type="number" id="ascii-height" value="45" min="20" max="80"></label>
+                </div>
+            </div>
+            <div class="ascii-quality">
+                <label class="toggle-label"><input type="checkbox" id="ascii-ao" checked><span class="toggle-slider"></span><span class="toggle-text">Ambient Occlusion</span></label>
+                <label class="toggle-label"><input type="checkbox" id="ascii-shadows" checked><span class="toggle-slider"></span><span class="toggle-text">Soft Shadows</span></label>
+                <label class="toggle-label"><input type="checkbox" id="ascii-color" checked><span class="toggle-slider"></span><span class="toggle-text">Color</span></label>
+            </div>
+            <pre id="ascii-output" class="ascii-output">[ Select a scene above ]</pre>
+        </div>
+    </div>
+</div>
+
+<!-- ASCII 3D CANVAS OVERLAY (interactive full-screen) -->
+<div id="ascii-canvas-overlay" class="ascii-canvas-overlay hidden">
+    <canvas id="ascii-3d-canvas"></canvas>
+    <div class="ascii-canvas-hud">
+        <button class="icon-btn" id="ascii-canvas-close" title="Close (Esc)"><svg class="ic-sm"><use href="#ic-x"/></svg></button>
+        <button class="icon-btn" id="ascii-canvas-quality" title="Toggle quality">⚡</button>
+    </div>
+</div>
+
+<!-- NOTIFICATIONS -->
+<div id="notification-container" class="notification-container"></div>
+
+<!-- ═══════════════════════════════════════════════════════════
+  SECTION 6: MAIN APPLICATION SCRIPT
+  The brain. 11,000+ lines of vanilla JavaScript.
+  Loaded last so all the DOM elements exist before it runs.
+  If you're reading this and wondering where the logic is —
+  it's all in script.js. One file to rule them all.
+  We know it's not "best practice." Best practice doesn't
+  run entirely in a browser with zero backend.
+  ═══════════════════════════════════════════════════════════ -->
+<script src="script.js"></script>
+<script>
+    if(window.mermaid && mermaid.initialize) mermaid.initialize({startOnLoad:false,theme:'dark',themeVariables:{primaryColor:'#00f3ff',primaryTextColor:'#fff',primaryBorderColor:'#00f3ff',lineColor:'#00f3ff',background:'#0a0a0a',mainBkg:'#0a0a0a',textColor:'#e0e0e0',fontSize:'14px'}});
+    (function(){
+        const s=document.getElementById('splash-screen'),m=document.getElementById('main-app'),p=document.getElementById('splash-progress'),t=document.getElementById('splash-text');
+        const steps=[{p:15,t:'LOADING NEURAL CORE...'},{p:30,t:'INITIALIZING VECTOR ENGINE...'},{p:50,t:'CONFIGURING OCR...'},{p:70,t:'LOADING MATH LIBRARIES...'},{p:85,t:'BUILDING QUOTA SYSTEM...'},{p:100,t:'SYSTEM ONLINE'}];
+        let i=0;function next(){if(i<steps.length){p.style.width=steps[i].p+'%';t.textContent=steps[i].t;i++;setTimeout(next,350);}else{setTimeout(()=>{s.style.opacity='0';setTimeout(()=>{s.style.display='none';m.style.display='flex';m.style.opacity='0';setTimeout(()=>{m.style.transition='opacity 0.5s';m.style.opacity='1';},50);},500);},300);}}
+        window.addEventListener('load',()=>setTimeout(next,400));
+    })();
+</script>
+<!-- Service Worker Registration -->
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').then(reg => {
+      console.log('[AETHER] SW registered:', reg.scope);
+    }).catch(err => console.warn('[AETHER] SW registration failed:', err));
+  });
+}
+// Handle PWA shortcuts
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('action') === 'new') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => document.getElementById('btn-new-chat')?.click(), 1000);
+  });
+} else if (urlParams.get('action') === 'research') {
+  document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => document.getElementById('btn-deep-research')?.click(), 1000);
+  });
+}
+</script>
+<!-- AETHER Custom Dialog (replaces browser dialogs) -->
+<div id="aether-dialog-overlay" class="aether-dialog-overlay" style="display:none"></div>
+
+<!-- ═══════════════════════════════════════════════════════════
+  END OF AETHER NEURAL INTERFACE v5.14
+  If you've read this far in the source code, you're either:
+  a) A contributor trying to understand the architecture
+  b) A competitor trying to figure out how we did it
+  c) Someone who fell asleep and your face hit the keyboard
+
+  In all cases: welcome to AETHER.
+  The code is messy, the comments are sarcastic, and the
+  CSS is ~8,500 lines long. But it works. And it's yours.
+  GPL-3.0. Fork it. Break it. Make it better.
+  Just don't make it white.
+
+  — The Architect, 2026
+  ═══════════════════════════════════════════════════════════ -->
+<!-- ═══ SKILLS PANEL MODAL ══════════════════════════════════════════════════ -->
+<div id="skills-panel-modal" class="skills-modal hidden">
+  <div class="skills-modal-card">
+    <div class="skills-modal-header">
+      <div>
+        <div class="skills-modal-title"><span style="color:var(--neon-cyan)">⬡</span> AETHER Skills</div>
+        <div class="skills-modal-subtitle">Activate a specialised capability pack. AETHER's reasoning, tools, and output format adapt to match.</div>
+      </div>
+      <button class="skills-modal-close" onclick="document.getElementById('skills-panel-modal').classList.add('hidden')">&times;</button>
+    </div>
+    <div class="skills-active-bar" id="skills-active-bar" style="display:none">
+      <span class="skills-active-label">Active skill:</span>
+      <span class="skills-active-name" id="skills-active-name"></span>
+      <button class="skills-deactivate-btn" onclick="typeof deactivateSkill==='function'&&(deactivateSkill(),renderSkillsPanel())">Deactivate</button>
+    </div>
+    <div class="skills-search-row">
+      <input type="text" id="skills-search" class="skills-search-input" placeholder="Search skills…" oninput="renderSkillsPanel()">
+      <div class="skills-filter-row" id="skills-filter-row">
+        <button class="skills-cat-btn active" data-cat="all" onclick="setSkillsCat('all')">All</button>
+        <button class="skills-cat-btn" data-cat="core" onclick="setSkillsCat('core')">Core</button>
+        <button class="skills-cat-btn" data-cat="professional" onclick="setSkillsCat('professional')">Professional</button>
+        <button class="skills-cat-btn" data-cat="research" onclick="setSkillsCat('research')">Research</button>
+        <button class="skills-cat-btn" data-cat="power" onclick="setSkillsCat('power')">Power</button>
+        <button class="skills-cat-btn" data-cat="creative" onclick="setSkillsCat('creative')">Creative</button>
+        <button class="skills-cat-btn" data-cat="utility" onclick="setSkillsCat('utility')">Utility</button>
+      </div>
+    </div>
+    <div class="skills-grid" id="skills-grid"><!-- rendered by JS --></div>
+    <div class="skills-footer">
+      <!-- Why no community skills? -->
+      <div class="skills-attribution">
+        Skills are authored exclusively by <strong>The Architect</strong>.
+        <span class="skills-attribution-note">This isn't gatekeeping — a community skill is a prompt injection vector until there's a sandboxed runtime. Every skill ships from source, reviewed, and intentional.</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ RELEASE NOTES BUTTON (sidebar bottom) ════════════════════════════════ -->
+<script>
+// Wire btn-skills click (fallback if onclick attr missed)
+document.addEventListener('DOMContentLoaded', () => {
+  const btnSkills = document.getElementById('btn-skills');
+  if (btnSkills) btnSkills.addEventListener('click', () => {
+    if (typeof openSkillsPanel === 'function') openSkillsPanel();
+  });
+  const btnAuth = document.getElementById('btn-auth');
+  if (btnAuth) btnAuth.addEventListener('click', () => {
+    if (typeof openAuthModal === 'function') openAuthModal();
+  });
+});
+</script>
+
+</body>
+</html>

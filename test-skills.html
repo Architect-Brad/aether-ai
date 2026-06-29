@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AETHER Test Suite</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, monospace; background: #0a0a0f; color: #c8d8e8; padding: 24px; }
+  h1 { color: #00f3ff; font-size: 1.4rem; margin-bottom: 4px; }
+  h2 { color: #8be9fd; font-size: 1rem; margin: 20px 0 8px; }
+  .sub { color: #556; font-size: 0.8rem; margin-bottom: 20px; }
+  .test { border: 1px solid #1a1a2e; border-radius: 6px; padding: 12px 16px; margin-bottom: 8px; background: #0e0e1a; }
+  .test.pass { border-color: #00ff8844; }
+  .test.fail { border-color: #ff444488; }
+  .test .name { font-weight: 600; }
+  .test .name::after { content: ' — '; font-weight: 400; color: #556; }
+  .test .msg { color: #889; font-size: 0.85rem; }
+  .test.pass .name { color: #00ff88; }
+  .test.fail .name { color: #ff4444; }
+  .summary { margin-top: 20px; padding: 12px; border-top: 1px solid #1a1a2e; font-size: 0.85rem; }
+  .summary .count { font-weight: 700; color: #00f3ff; }
+  #results { margin-top: 12px; }
+  #groups { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  #groups button { background: #0e0e1a; border: 1px solid #1a1a2e; color: #889; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  #groups button:hover { border-color: #00f3ff44; color: #c8d8e8; }
+  #groups button.active { border-color: #00f3ff66; color: #00f3ff; background: #00f3ff11; }
+  .log { margin-top: 4px; font-size: 0.75rem; color: #667; max-height: 120px; overflow-y: auto; }
+  .elapsed { color: #556; font-size: 0.75rem; }
+</style>
+</head>
+<body>
+  <h1>⬡ AETHER Test Suite</h1>
+  <div class="sub">Skills · Error Reporter · Notifications · Integration</div>
+  <div id="groups">
+    <button data-group="all" class="active">All</button>
+    <button data-group="skills">Skills</button>
+    <button data-group="errors">Error Reporter</button>
+    <button data-group="integration">Integration</button>
+    <button data-group="html">HTML/CSS</button>
+  </div>
+  <button id="runBtn" style="margin-bottom:12px">▶ Run Selected</button>
+  <div id="results"></div>
+  <div class="summary" id="summary"></div>
+
+<script type="module">
+const results = document.getElementById('results');
+const summary = document.getElementById('summary');
+const runBtn = document.getElementById('runBtn');
+let passed = 0, failed = 0, currentFilter = 'all';
+
+function test(name, fn, group = 'general') {
+  const el = document.createElement('div');
+  el.className = 'test';
+  el.dataset.group = group;
+  el.innerHTML = `<span class="name">${name}</span><span class="msg">running…</span><span class="elapsed"></span><div class="log"></div>`;
+  results.appendChild(el);
+  return { el, name, fn, group };
+}
+
+async function runTest(t) {
+  if (currentFilter !== 'all' && t.group !== currentFilter) {
+    t.el.style.display = 'none';
+    return;
+  }
+  t.el.style.display = '';
+  const start = performance.now();
+  try {
+    await t.fn();
+    t.el.className = 'test pass';
+    t.el.querySelector('.msg').textContent = 'PASS';
+    t.el.querySelector('.elapsed').textContent = ` ${(performance.now() - start).toFixed(0)}ms`;
+    passed++;
+  } catch(e) {
+    t.el.className = 'test fail';
+    t.el.querySelector('.msg').textContent = `FAIL: ${e.message || e}`;
+    t.el.querySelector('.elapsed').textContent = ` ${(performance.now() - start).toFixed(0)}ms`;
+    const log = t.el.querySelector('.log');
+    if (e.stack) log.textContent = e.stack;
+    failed++;
+  }
+}
+
+function updateSummary() {
+  const total = passed + failed;
+  summary.innerHTML = `
+    <span class="count">${total}</span> tests ·
+    <span style="color:#00ff88">${passed} passed</span> ·
+    <span style="color:#ff4444">${failed} failed</span>
+    ${failed === 0 ? ' ✓ All passing' : ' ✗ Some failures'}
+  `;
+}
+
+// ── Helper: simulate reportFeatureError in a sandbox ──────────
+function sandboxReportFeatureError(feature, error, context) {
+  const errInfo = {
+    feature,
+    message: error?.message || String(error || 'Unknown error'),
+    stack: error?.stack,
+    context: context || {},
+    timestamp: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    url: location.href,
+  };
+  return errInfo;
+}
+
+async function runAll() {
+  results.innerHTML = '';
+  passed = 0; failed = 0;
+
+  // ══════════════════════════════════════════════════════════
+  // SKILL TESTS
+  // ══════════════════════════════════════════════════════════
+  const skillTests = [
+    // ── Documents Supremacy ────────────────────────────────
+    test('DS: Module imports and has default export', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (!mod.default) throw new Error('No default export');
+      if (mod.default.name !== 'documents-supremacy') throw new Error('Unexpected name');
+    }, 'skills'),
+
+    test('DS: Has execute, extractSpec, SYSTEM_PROMPT', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.execute !== 'function') throw new Error('execute missing');
+      if (typeof mod.default.extractSpec !== 'function') throw new Error('extractSpec missing');
+      if (!mod.default.systemPrompt || mod.default.systemPrompt.length < 50) throw new Error('systemPrompt too short');
+    }, 'skills'),
+
+    test('DS: extractSpec parses raw JSON', async () => {
+      const mod = await import('./documents-supremacy.js');
+      const spec = mod.default.extractSpec('{"type":"document","content":"hello"}');
+      if (!spec || spec.type !== 'document') throw new Error('Failed to extract spec');
+    }, 'skills'),
+
+    test('DS: extractSpec strips code fences', async () => {
+      const mod = await import('./documents-supremacy.js');
+      const spec = mod.default.extractSpec('```json\n{"type":"document","content":"hello"}\n```');
+      if (!spec || spec.type !== 'document') throw new Error('Failed from code fences');
+    }, 'skills'),
+
+    test('DS: extractSpec returns null for non-JSON', async () => {
+      const mod = await import('./documents-supremacy.js');
+      const spec = mod.default.extractSpec('just some text');
+      if (spec !== null) throw new Error('Should return null for non-JSON');
+    }, 'skills'),
+
+    test('DS: Supported formats listed', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (!mod.default.formats || !mod.default.formats.includes('docx')) throw new Error('formats missing docx');
+    }, 'skills'),
+
+    test('DS: tools.createDocx is a function', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.tools?.createDocx !== 'function') throw new Error('tools.createDocx not a function');
+    }, 'skills'),
+
+    test('DS: tools.rebuild is a function', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.tools?.rebuild !== 'function') throw new Error('tools.rebuild not a function');
+    }, 'skills'),
+
+    test('DS: tools.templates.getTemplate is a function', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.tools?.templates?.getTemplate !== 'function') throw new Error('getTemplate not a function');
+    }, 'skills'),
+
+    // ── Discovery Skill ─────────────────────────────────────
+    test('Discovery: Module imports and has default export', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (!mod.default) throw new Error('No default export');
+      if (mod.default.name !== 'discovery') throw new Error('Unexpected name');
+    }, 'skills'),
+
+    test('Discovery: Has execute, extractSpec, SYSTEM_PROMPT', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (typeof mod.default.execute !== 'function') throw new Error('execute missing');
+      if (typeof mod.default.extractSpec !== 'function') throw new Error('extractSpec missing');
+      if (!mod.default.systemPrompt || mod.default.systemPrompt.length < 50) throw new Error('systemPrompt too short');
+    }, 'skills'),
+
+    test('Discovery: KeyStore get/set works', async () => {
+      const { KeyStore } = await import('./discovery-skill.js');
+      if (!KeyStore || typeof KeyStore.set !== 'function') throw new Error('KeyStore missing');
+      KeyStore.set('_test_key', '_test_val');
+      const v = KeyStore.get('_test_key');
+      if (v !== '_test_val') throw new Error('get/set failed');
+      KeyStore.set('_test_key', null);
+    }, 'skills'),
+
+    test('Discovery: execute rejects invalid action', async () => {
+      const mod = await import('./discovery-skill.js');
+      const c = document.createElement('div');
+      try {
+        await mod.default.execute({ action: '__nonexistent__' }, c);
+        throw new Error('Should have thrown');
+      } catch(e) {
+        if (!e.message.includes('Unknown') && !e.message.includes('unknown')) throw new Error('Wrong error: ' + e.message);
+      }
+    }, 'skills'),
+
+    test('Discovery: extractSpec returns null for empty', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (mod.default.extractSpec('') !== null) throw new Error('Should return null for empty');
+    }, 'skills'),
+
+    test('Discovery: Has tools (webSearch, imageSearch, etc.)', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (typeof mod.default.tools?.webSearch !== 'function') throw new Error('webSearch missing');
+      if (typeof mod.default.tools?.fetchWeather !== 'function') throw new Error('fetchWeather missing');
+    }, 'skills'),
+  ];
+
+  // ══════════════════════════════════════════════════════════
+  // ERROR REPORTER TESTS
+  // ══════════════════════════════════════════════════════════
+  const errorTests = [
+    test('ERR: sandbox reportFeatureError creates correct info', () => {
+      const err = new Error('test error message');
+      const info = sandboxReportFeatureError('TestFeature', err, { key: 'val' });
+      if (info.feature !== 'TestFeature') throw new Error('feature mismatch');
+      if (info.message !== 'test error message') throw new Error('message mismatch');
+      if (info.context.key !== 'val') throw new Error('context not passed');
+      if (!info.stack) throw new Error('stack missing');
+      if (!info.timestamp) throw new Error('timestamp missing');
+      if (!info.userAgent) throw new Error('userAgent missing');
+    }, 'errors'),
+
+    test('ERR: handles null error gracefully', () => {
+      const info = sandboxReportFeatureError('NullTest', null);
+      if (info.message !== 'Unknown error') throw new Error('Expected Unknown error, got: ' + info.message);
+    }, 'errors'),
+
+    test('ERR: handles string error', () => {
+      const info = sandboxReportFeatureError('StringTest', 'just a string');
+      if (info.message !== 'just a string') throw new Error('Expected string message, got: ' + info.message);
+    }, 'errors'),
+
+    test('ERR: handles error without message', () => {
+      const info = sandboxReportFeatureError('NoMsg', {});
+      if (info.message !== '[object Object]') throw new Error('Expected object string, got: ' + info.message);
+    }, 'errors'),
+
+    test('ERR: error log array stores entries', () => {
+      // Simulate the log
+      const log = [];
+      for (let i = 0; i < 5; i++) {
+        log.push(sandboxReportFeatureError('Test' + i, new Error('err' + i)));
+      }
+      if (log.length !== 5) throw new Error('Expected 5 entries, got ' + log.length);
+      if (log[0].feature !== 'Test0') throw new Error('First entry wrong');
+      if (log[4].feature !== 'Test4') throw new Error('Last entry wrong');
+    }, 'errors'),
+
+    test('ERR: error log caps at 50 entries', () => {
+      const log = [];
+      for (let i = 0; i < 60; i++) {
+        log.push(sandboxReportFeatureError('T', new Error('e' + i)));
+        if (log.length > 50) log.shift();
+      }
+      if (log.length !== 50) throw new Error('Expected 50 entries, got ' + log.length);
+      // The first entry should have been shifted out
+      if (log[0].message !== 'e10') throw new Error('Oldest entry should be e10, got ' + log[0].message);
+    }, 'errors'),
+
+    test('ERR: feature name with special chars stored correctly', () => {
+      const info = sandboxReportFeatureError('<img onerror=alert(1)>', new Error('test'));
+      // The feature name is a plain string — it should be stored as-is (not executed)
+      if (info.feature !== '<img onerror=alert(1)>') throw new Error('Feature name changed: ' + info.feature);
+      // When rendered via innerHTML, it would need escaping — test checks storage, not rendering
+    }, 'errors'),
+
+    test('ERR: stack trace preserved', () => {
+      try { throw new Error('stack check'); } catch(e) {
+        const info = sandboxReportFeatureError('StackTest', e);
+        if (!info.stack || !info.stack.includes('stack check')) throw new Error('Stack not preserved');
+      }
+    }, 'errors'),
+
+    test('ERR: context object is stored', () => {
+      const ctx = { model: 'gpt-4', provider: 'openai', args: ['hello', 42] };
+      const info = sandboxReportFeatureError('CtxTest', new Error('err'), ctx);
+      if (info.context.model !== 'gpt-4') throw new Error('context.model not stored');
+      if (info.context.args[1] !== 42) throw new Error('context.args not stored');
+    }, 'errors'),
+
+    test('ERR: URL is captured', () => {
+      const info = sandboxReportFeatureError('UrlTest', new Error('err'));
+      if (!info.url || !info.url.includes(location.host)) throw new Error('URL not captured: ' + info.url);
+    }, 'errors'),
+  ];
+
+  // ══════════════════════════════════════════════════════════
+  // INTEGRATION TESTS
+  // ══════════════════════════════════════════════════════════
+  const integrationTests = [
+    test('INT: Both skill modules load from correct paths', async () => {
+      const ds = await import('./documents-supremacy.js');
+      const disc = await import('./discovery-skill.js');
+      if (!ds.default || !disc.default) throw new Error('One or both modules failed to load');
+    }, 'integration'),
+
+    test('INT: Document skill has tools.renderResult', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.ui?.renderResult !== 'function') throw new Error('renderResult missing');
+    }, 'integration'),
+
+    test('INT: Discovery skill has renderers', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (typeof mod.default.renderers?.images?.render !== 'function') throw new Error('image renderer missing');
+      if (typeof mod.default.renderers?.weather?.render !== 'function') throw new Error('weather renderer missing');
+    }, 'integration'),
+
+    test('INT: Document skill tools.templates accessible', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.tools?.templates?.getTemplate !== 'function') throw new Error('getTemplate missing');
+      if (typeof mod.default.tools?.templates?.searchTemplates !== 'function') throw new Error('searchTemplates missing');
+    }, 'integration'),
+
+    test('INT: Document skill tools.rebuild is a function', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.tools?.rebuild !== 'function') throw new Error('rebuild missing');
+    }, 'integration'),
+
+    test('INT: Document skill downloadBlob is a function', async () => {
+      const mod = await import('./documents-supremacy.js');
+      if (typeof mod.default.downloadBlob !== 'function') throw new Error('downloadBlob missing');
+    }, 'integration'),
+
+    test('INT: Discovery KeyStore.available returns array', async () => {
+      const { KeyStore } = await import('./discovery-skill.js');
+      const avail = KeyStore.available();
+      if (!Array.isArray(avail)) throw new Error('available() should return array');
+    }, 'integration'),
+
+    test('INT: Discovery openLightbox is a function', async () => {
+      const mod = await import('./discovery-skill.js');
+      if (typeof mod.default.openLightbox !== 'function') throw new Error('openLightbox missing');
+    }, 'integration'),
+  ];
+
+  // ══════════════════════════════════════════════════════════
+  // HTML/CSS STRUCTURE TESTS
+  // ══════════════════════════════════════════════════════════
+  const htmlTests = [
+    test('HTML: error-count-badge in index.html', async () => {
+      const r = await fetch('./index.html');
+      const h = await r.text();
+      if (!h.includes('error-count-badge')) throw new Error('not found');
+    }, 'html'),
+
+    test('CSS: .notification.dev-error defined', async () => {
+      const r = await fetch('./style.css');
+      const c = await r.text();
+      if (!c.includes('.notification.dev-error')) throw new Error('.notification.dev-error not in CSS');
+    }, 'html'),
+
+    test('CSS: .error-count-badge defined', async () => {
+      const r = await fetch('./style.css');
+      const c = await r.text();
+      if (!c.includes('.error-count-badge')) throw new Error('.error-count-badge not in CSS');
+    }, 'html'),
+
+    test('CSS: .dev-error-btn defined', async () => {
+      const r = await fetch('./style.css');
+      const c = await r.text();
+      if (!c.includes('.dev-error-btn')) throw new Error('.dev-error-btn not in CSS');
+    }, 'html'),
+
+    test('HTML: script.js loads as script tag', async () => {
+      const r = await fetch('./index.html');
+      const h = await r.text();
+      if (!h.includes('script.js')) throw new Error('script.js not referenced');
+    }, 'html'),
+
+    test('HTML: reportFeatureError defined in script.js', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes('function reportFeatureError')) throw new Error('reportFeatureError not found');
+    }, 'html'),
+
+    test('HTML: openErrorLog defined in script.js', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes('openErrorLog')) throw new Error('openErrorLog not found');
+    }, 'html'),
+
+    test('HTML: synthetic skill "documents-supremacy" in AETHER_SKILLS', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes("'documents-supremacy'")) throw new Error('documents-supremacy not in AETHER_SKILLS');
+    }, 'html'),
+
+    test('HTML: synthetic skill "discovery" in AETHER_SKILLS', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes('discovery:')) throw new Error('discovery skill not in AETHER_SKILLS');
+    }, 'html'),
+
+    test('HTML: safe-stringify in reportFeatureError (circular ref protection)', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes('Circular or unserializable')) throw new Error('safe-stringify fallback not found');
+    }, 'html'),
+
+    test('CSS: .err-log-detail used for expandable error details', async () => {
+      const r = await fetch('./script.js');
+      const js = await r.text();
+      if (!js.includes('err-log-detail')) throw new Error('.err-log-detail not found in script.js');
+    }, 'html'),
+  ];
+
+  const allTests = [...skillTests, ...errorTests, ...integrationTests, ...htmlTests];
+  for (const t of allTests) {
+    await runTest(t);
+  }
+
+  updateSummary();
+}
+
+// ── Group filter buttons ──────────────────────────────
+document.querySelectorAll('#groups button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#groups button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.group;
+
+    // Re-run with filter
+    document.querySelectorAll('.test').forEach(el => {
+      if (currentFilter === 'all' || el.dataset.group === currentFilter) {
+        el.style.display = '';
+      } else {
+        el.style.display = 'none';
+      }
+    });
+  });
+});
+
+runBtn.addEventListener('click', runAll);
+runAll();
+
+</script>
+</body>
+</html>
