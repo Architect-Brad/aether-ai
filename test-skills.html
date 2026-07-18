@@ -397,6 +397,36 @@ async function runAll() {
       if (!js.includes('discovery:')) throw new Error('discovery skill not in AETHER_SKILLS');
     }, 'html'),
 
+    test('HTML: flagship skills pack loaded in index.html', async () => {
+      const r = await fetch('./index.html');
+      const html = await r.text();
+      if (!html.includes('aether-skills-pack.js')) throw new Error('aether-skills-pack.js not in index.html');
+    }, 'html'),
+
+    test('Pack: aether-code flagship skill defined', async () => {
+      const r = await fetch('./core/aether-skills-pack.js');
+      const js = await r.text();
+      if (!js.includes("name: 'aether-code'")) throw new Error('aether-code missing from pack');
+      if (!js.includes('mergeIntoRegistry')) throw new Error('mergeIntoRegistry missing');
+      if (!js.includes('SCHEMA_VERSION')) throw new Error('schema v2 missing');
+    }, 'html'),
+
+    test('Runtime: aether-skill-runtime.js present with playbooks', async () => {
+      const r = await fetch('./core/aether-skill-runtime.js');
+      const js = await r.text();
+      if (!js.includes('AETHER_SkillRuntime')) throw new Error('AETHER_SkillRuntime missing');
+      if (!js.includes('runGoldenSmokes')) throw new Error('golden smokes missing');
+      if (!js.includes('startWorkflow')) throw new Error('startWorkflow missing');
+      if (!js.includes('bugfix')) throw new Error('aether-code bugfix playbook missing');
+    }, 'html'),
+
+    test('HTML: skill-runtime-bar mount point', async () => {
+      const r = await fetch('./index.html');
+      const html = await r.text();
+      if (!html.includes('skill-runtime-bar')) throw new Error('skill-runtime-bar missing');
+      if (!html.includes('aether-skill-runtime.js')) throw new Error('runtime script not linked');
+    }, 'html'),
+
     test('HTML: safe-stringify in reportFeatureError (circular ref protection)', async () => {
       const r = await fetch('./script.js');
       const js = await r.text();
