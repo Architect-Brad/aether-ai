@@ -468,6 +468,11 @@
     ok('skill_runtime', !!g.AETHER_SkillRuntime, g.AETHER_SkillRuntime && g.AETHER_SkillRuntime.version);
     ok('deep_research', !!g.AETHER_DeepResearch, g.AETHER_DeepResearch && g.AETHER_DeepResearch.version);
     ok('moat', !!g.AETHER_Moat, g.AETHER_Moat && g.AETHER_Moat.version);
+    ok('markdown', !!g.AETHER_Markdown, g.AETHER_Markdown && g.AETHER_Markdown.version);
+    if (g.AETHER_Markdown && g.AETHER_Markdown.runGoldenFixtures) {
+      var md = g.AETHER_Markdown.runGoldenFixtures();
+      ok('markdown_fixtures', md.ok || (md.passed / md.total >= 0.8), md.passed + '/' + md.total);
+    }
     ok('ghost', !!(g.AETHER_Ghost && g.AETHER_Ghost.propose), '');
     ok('code_pro', !!(g.AETHER_CodePro && g.AETHER_CodePro.listCheckpoints), '');
     ok('changeset', !!(g.AETHER_ChangeSet || g.AETHER_Changeset), '');

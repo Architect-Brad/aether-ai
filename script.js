@@ -12719,10 +12719,55 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     // If you find a bug, check if it's in the regex or in the
     // model's output. 50/50 chance it's the model.
     // ═══════════════════════════════════════════════════════════
-    function parseMarkdown(text) {
+    // Host bridge for AETHER Markdown Engine (core/aether-markdown.js)
+    function getMarkdownHost() {
+        return {
+            createCodeBlock: function (lang, code, filename) {
+                try {
+                    return createAdvancedCodeBlock(lang, code, filename);
+                } catch (e) {
+                    return createCodingBlock(lang, code, filename);
+                }
+            },
+            highlight: function (codeEl, lang) {
+                highlightWithHljs(codeEl, lang);
+            },
+            renderGraph: function (type, lines) {
+                return renderGraph(type, lines);
+            },
+            renderMath: function (el) {
+                renderMath(el);
+            },
+            buildPlanDOM: function (raw, isTodo) {
+                return buildPlanDOM(raw, isTodo);
+            },
+            showThoughts: function () {
+                return !!state.showThoughts;
+            },
+            getLiveThinkEl: function () {
+                return liveThinkEl;
+            },
+        };
+    }
+    try {
+        if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.configure) {
+            AETHER_Markdown.configure(getMarkdownHost());
+        }
+    } catch (_) {}
+
+    function parseMarkdown(text, opts) {
+        // Flagship path: modular GFM engine
+        if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.parse) {
+            try {
+                AETHER_Markdown.configure(getMarkdownHost());
+                return AETHER_Markdown.parse(text, opts || {});
+            } catch (e) {
+                console.warn('[AETHER] Markdown engine fallback:', e.message || e);
+            }
+        }
+        // Legacy fallback (pre-v5.34)
         const { think, visible } = splitThink(text);
         const container = document.createElement('div');
-        // Only render static think block if live think element doesn't already exist in DOM
         if (think && state.showThoughts && !liveThinkEl && !document.querySelector('.thought-process.modern-thought:not(.live-thought)')) {
             const tokens = Math.round((think.match(/\S+/g)||[]).length);
             const td = document.createElement('div');
@@ -12738,10 +12783,6 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         }
 
         let displayText = visible || text;
-
-        // ── AETHER Code: plan/todo → DOM via buildPlanDOM (segment approach) ──
-        // Split displayText on aether:plan / aether:todo markers
-        // and insert DOM elements directly instead of passing HTML strings to renderBlocks
         const PLAN_RE = /<aether:(plan|todo)>([\s\S]*?)<\/aether:\1>/gi;
         const segments = [];
         let lastIdx = 0, pm;
@@ -14512,8 +14553,11 @@ ${result}`));
                                                 (m) => /<\/aether:todo>/.test(m) ? m : '\n\n*📋 Updating TODO…*\n')
                                             .replace(/\[\[\w+:[^\]]*$/, '');
                                         sanitizedDisplay = wrapToolCallsForDisplay(sanitizedDisplay);
+                                        if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.stabilizeForStream) {
+                                            sanitizedDisplay = AETHER_Markdown.stabilizeForStream(sanitizedDisplay);
+                                        }
                                         aetherMsg.innerHTML = '';
-                                        aetherMsg.appendChild(parseMarkdown(sanitizedDisplay));
+                                        aetherMsg.appendChild(parseMarkdown(sanitizedDisplay, { stream: true }));
                                     }
                                 } else if(!aetherMsg.querySelector('.streaming-cursor')){
                                     aetherMsg.innerHTML='<p class="streaming-cursor">▋</p>';
@@ -17076,6 +17120,21 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
             if (typeof AETHER_Ship === 'undefined') { addSystemMessage('Ship layer offline'); return; }
             addSystemMessage(AETHER_Ship.goldenMarkdown(AETHER_Ship.runGoldenPaths()));
         } },
+        { id:'mdtest',    label:'/mdtest', desc:'Markdown engine golden fixtures', group:'System', action: () => {
+            if (typeof AETHER_Markdown === 'undefined' || !AETHER_Markdown.runGoldenFixtures) {
+                addSystemMessage('Markdown engine offline');
+                return;
+            }
+            try { AETHER_Markdown.configure(getMarkdownHost()); } catch (_) {}
+            const r = AETHER_Markdown.runGoldenFixtures();
+            addSystemMessage(
+                '**Markdown Engine v' + AETHER_Markdown.version + '** — ' +
+                (r.ok ? '✓ PASS' : '✗ FAIL') + ' · ' + r.passed + '/' + r.total + '\n\n' +
+                r.results.map(function (x) {
+                    return (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : '');
+                }).join('\n')
+            );
+        } },
         { id:'onboard',   label:'/onboard', desc:'Replay first-run onboarding wizard', group:'System', action: () => {
             if (typeof AETHER_Ship !== 'undefined') AETHER_Ship.openOnboarding(true);
             else showNotification('Ship offline', 'warn');
@@ -17622,7 +17681,19 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.33', date: 'July 2026', tag: 'latest',
+            version: 'v5.34', date: 'July 2026', tag: 'latest',
+            headline: 'Markdown Engine — GFM pipeline, sanitize, stream fences, code chrome',
+            notes: [
+                { type:'new',  text:'AETHER_Markdown v1 — modular core/aether-markdown.js engine' },
+                { type:'new',  text:'GFM — tables+align, nested lists, tasks, strike, autolinks, images' },
+                { type:'new',  text:'SECURITY — safeHref blocks javascript:/vbscript; escaped HTML by default' },
+                { type:'new',  text:'STREAM — stabilize open fences mid-stream; /mdtest golden fixtures' },
+                { type:'new',  text:'CODE CHROME — wrap toggle, collapse long blocks, host createCodingBlock' },
+                { type:'new',  text:'HOOKS — plan/todo, CoT, KaTeX, hljs, graph blocks preserved' },
+            ],
+        },
+        {
+            version: 'v5.33', date: 'July 2026', tag: '',
             headline: 'Parallel Ship — golden paths, onboard, fusion, offline, RAG UX',
             notes: [
                 { type:'new',  text:'SHIP LAYER — core/aether-ship.js golden paths + onboarding + offline banner' },
@@ -21109,12 +21180,17 @@ Format the final summary as a single, clean text block divided into the five lab
     // ── Console signature ─────────────────────────────────────
     const _ver = typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.27';
     console.log('%c ⬡ AETHER ' + _ver + ' AETHER CODE PRO ONLINE ', 'background:#9b59b6;color:#fff;font-weight:bold;font-size:12px;padding:4px 8px;border-radius:3px;font-family:monospace');
-    console.log('%c Ship · Moat · DR v3 · Skills: ' + Object.keys(AETHER_SKILLS).length, 'color:#00f3ff;font-family:monospace');
+    console.log('%c Ship · Moat · Markdown · Skills: ' + Object.keys(AETHER_SKILLS).length, 'color:#00f3ff;font-family:monospace');
     try {
         if (typeof AETHER_Moat !== 'undefined') {
             AETHER_Moat.installHooks();
             var _ms = AETHER_Moat.computeScore();
             console.log('%c Moat integrity ' + _ms.overall + '/100 grade ' + _ms.grade, 'color:#9b94e8;font-family:monospace');
+        }
+        if (typeof AETHER_Markdown !== 'undefined') {
+            try { AETHER_Markdown.configure(getMarkdownHost()); } catch (_) {}
+            var _md = AETHER_Markdown.runGoldenFixtures ? AETHER_Markdown.runGoldenFixtures() : null;
+            if (_md) console.log('%c Markdown fixtures ' + _md.passed + '/' + _md.total + (_md.ok ? ' PASS' : ' FAIL'), 'color:' + (_md.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
         }
         if (typeof AETHER_Ship !== 'undefined') {
             AETHER_Ship.init();

@@ -6719,6 +6719,54 @@ td.dcol { font-family: monospace; font-size: .67rem; color: #778899; padding: 2p
     border-color: rgba(127,119,221,0.4); color: #b0aaf0;
 }
 
+/* ══════════════════════════════════════════════════════════ */
+/* AETHER MARKDOWN ENGINE v1                                 */
+/* ══════════════════════════════════════════════════════════ */
+.aether-md.md-root { line-height: 1.65; word-wrap: break-word; }
+.aether-md .md-h { margin: 0.85em 0 0.4em; font-weight: 650; letter-spacing: -0.01em; }
+.aether-md .md-table-wrap { overflow-x: auto; margin: 0.75em 0; border-radius: 8px; }
+.aether-md .md-table th,
+.aether-md .md-table td { padding: 8px 12px; border: 1px solid rgba(255,255,255,0.08); }
+.aether-md .md-table th { background: rgba(0,243,255,0.06); font-weight: 600; }
+.aether-md .md-img {
+    max-width: 100%; border-radius: 8px; margin: 0.5em 0;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+.aether-md .md-autolink { word-break: break-all; }
+.aether-md .md-quote {
+    border-left: 3px solid rgba(0,243,255,0.35);
+    margin: 0.6em 0; padding: 0.35em 0.85em;
+    color: #9aafbf; background: rgba(0,243,255,0.03);
+}
+.aether-md .task-list { list-style: none; padding-left: 0.25em; }
+.aether-md .task-item { display: flex; align-items: flex-start; gap: 8px; margin: 0.25em 0; }
+.aether-md .task-item input { margin-top: 0.3em; accent-color: #00f3ff; }
+.aether-md .task-done span { opacity: 0.65; text-decoration: line-through; }
+.aether-md .md-footnote-def { font-size: 0.85em; color: #7a8a9a; margin: 0.4em 0; }
+.aether-md .md-code-long:not(.md-code-expanded) .md-code-body {
+    max-height: 320px; overflow: hidden;
+    mask-image: linear-gradient(to bottom, #000 70%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.aether-md .md-code-expand,
+.md-code-expand {
+    display: block; width: 100%; margin-top: -4px; padding: 8px;
+    background: rgba(0,243,255,0.06); border: 1px solid rgba(0,243,255,0.15);
+    border-radius: 0 0 8px 8px; color: var(--neon-cyan, #00f3ff);
+    font-family: var(--font-mono); font-size: 0.68rem; cursor: pointer;
+}
+.aether-md pre.md-wrap,
+.md-code-body pre.md-wrap {
+    white-space: pre-wrap; word-break: break-word;
+}
+.md-wrap-btn.on { color: var(--neon-cyan, #00f3ff); border-color: rgba(0,243,255,0.35); }
+.aether-md .citation-ref {
+    display: inline-block; min-width: 1.1em; padding: 0 4px;
+    margin: 0 1px; border-radius: 4px; font-size: 0.7em;
+    background: rgba(127,119,221,0.2); color: #b0aaf0;
+    vertical-align: super; line-height: 1;
+}
+
 /* Ship layer — offline, onboard, checkpoints, mobile panels */
 .aether-offline-banner {
     position: fixed; top: 0; left: 0; right: 0; z-index: 13000;

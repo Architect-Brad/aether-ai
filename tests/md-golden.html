@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AETHER Markdown Golden</title>
+  <style>
+    body { font-family: ui-monospace, monospace; background: #0a0a0f; color: #cde; padding: 24px; }
+    h1 { color: #00f3ff; font-size: 1.1rem; }
+    .ok { color: #1d9e75; } .fail { color: #e24b4a; }
+    pre { background: #12121a; padding: 12px; border-radius: 8px; }
+    .demo { margin-top: 20px; padding: 16px; background: #101018; border-radius: 10px; border: 1px solid #1e2535; }
+  </style>
+  <script src="../core/aether-markdown.js"></script>
+</head>
+<body>
+  <h1>AETHER Markdown Engine — Golden</h1>
+  <p id="summary">Running…</p>
+  <pre id="out"></pre>
+  <div class="demo" id="demo"></div>
+  <script>
+    var r = AETHER_Markdown.runGoldenFixtures();
+    document.getElementById('summary').innerHTML =
+      '<span class="' + (r.ok ? 'ok' : 'fail') + '">' + (r.ok ? 'PASS' : 'FAIL') +
+      '</span> · ' + r.passed + '/' + r.total + ' · engine v' + AETHER_Markdown.version;
+    document.getElementById('out').textContent = r.results.map(function (x) {
+      return (x.pass ? '✓' : '✗') + ' ' + x.name + (x.detail ? ' — ' + x.detail : '');
+    }).join('\n');
+    document.getElementById('demo').appendChild(AETHER_Markdown.parse(
+      '# Demo\n\n**Bold** and *italic* and ~~strike~~\n\n' +
+      '| Col | Val |\n| --- | ---: |\n| a | 1 |\n\n' +
+      '- [x] Task done\n- [ ] Task open\n\n' +
+      '```js\nconsole.log("hi")\n```\n\n' +
+      '> Quote with `code`\n\n' +
+      'Link: [Aether](https://example.com) · https://example.com/path'
+    ));
+  </script>
+</body>
+</html>

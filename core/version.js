@@ -7,8 +7,8 @@
  */
 (function (g) {
   'use strict';
-  var VERSION = '5.33';
-  var CODENAME = 'Parallel Ship';
+  var VERSION = '5.34';
+  var CODENAME = 'Markdown Engine';
   var BUILD = '2026.07.18';
 
   g.AETHER_VERSION = VERSION;
