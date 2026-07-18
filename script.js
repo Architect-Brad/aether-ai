@@ -14055,6 +14055,14 @@ ${result}`));
                                 const displayText = visible.trim() || (splitThink(fullContent).thinkOpen ? '' : fullContent);
 
                                 if(displayText){
+                                    // Hide incomplete open ```viz / mermaid fences (both stream paths)
+                                    let streamSource = displayText;
+                                    if (window.AetherVisualizer && AetherVisualizer.stabilizeStream) {
+                                        try {
+                                            const vst = AetherVisualizer.stabilizeStream(streamSource);
+                                            if (vst && vst.pending) streamSource = vst.display;
+                                        } catch (_) {}
+                                    }
                                     if(state.blurInEnabled){
                                         // ── PER-WORD BLUR-IN ──────────────────
                                         // Stream as PLAIN TEXT with blur animation.
@@ -14070,7 +14078,7 @@ ${result}`));
                                         }
 
                                         // Strip XML tags and control sequences — keep as plain text
-                                        let plainText = displayText
+                                        let plainText = streamSource
                                             .replace(/<web_search[^>]*>[\s\S]*?<\/web_search>/gi, '')
                                             .replace(/<search[^>]*>[\s\S]*?<\/search>/gi, '')
                                             .replace(/<visit_website[^>]*>[\s\S]*?<\/visit_website>/gi, '')
@@ -14161,7 +14169,7 @@ ${result}`));
                                         }
                                     } else {
                                         // ── CLASSIC FULL RE-RENDER ────────────
-                                        let sanitizedDisplay = displayText
+                                        let sanitizedDisplay = streamSource
                                             .replace(/<web_search[^>]*>[\s\S]*?<\/web_search>/gi, '')
                                             .replace(/<search[^>]*>[\s\S]*?<\/search>/gi, '')
                                             .replace(/<visit_website[^>]*>[\s\S]*?<\/visit_website>/gi, '')
@@ -14175,13 +14183,6 @@ ${result}`));
                                         sanitizedDisplay = wrapToolCallsForDisplay(sanitizedDisplay);
                                         if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.stabilizeForStream) {
                                             sanitizedDisplay = AETHER_Markdown.stabilizeForStream(sanitizedDisplay);
-                                        }
-                                        // Viz v2: hide incomplete open ```viz fences mid-stream
-                                        if (window.AetherVisualizer && AetherVisualizer.stabilizeStream) {
-                                            try {
-                                                const vst = AetherVisualizer.stabilizeStream(sanitizedDisplay);
-                                                if (vst && vst.pending) sanitizedDisplay = vst.display;
-                                            } catch (_) {}
                                         }
                                         aetherMsg.innerHTML = '';
                                         aetherMsg.appendChild(parseMarkdown(sanitizedDisplay, { stream: true }));
