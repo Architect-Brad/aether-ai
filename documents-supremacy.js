@@ -1,33 +1,67 @@
 /**
  * ████████████████████████████████████████████████████████████████████████████
  *
- *   DOCUMENTS SUPREMACY  —  AETHER Skill  v1.0.0
+ *   DOCUMENTS SUPREMACY  —  AETHER Skill  v1.2.0
  *   Single-file browser-native office document engine.
  *
- *   Formats  :  .docx  .odt  .pptx  .xlsx  .db  .csv
- *   Templates:  28 production-ready templates
- *   Features :  Create · Read · Rebuild · Images · SQL
+ *   Formats  :  .docx  .odt  .pptx  .xlsx  .db  .csv  .pdf  .epub  .md
+ *   Templates:  production-ready templates (use-template)
+ *   Features :  Create · Read · Rebuild · Images · SQL · Convert
  *   Deps     :  docx@8 · pptxgenjs@3 · xlsx@0.18 · sql.js@1.10 · mammoth@1.6 · jszip@3.10
  *               All lazy-loaded from esm.sh — zero bundle cost until used.
+ *   v1.3     :  vendor pack (offline) · model JSON repair retry · soft parse v1.3
  *
  *   Usage:
  *     import DocumentsSupremacy from './documents-supremacy.js'
  *     await DocumentsSupremacy.execute(spec, container)
- *     await DocumentsSupremacy.rebuild(file, "rewrite as bullet points", apiKey, container)
+ *     await DocumentsSupremacy.rebuild(file, "rewrite as bullet points", apiConfig, container)
  *
  * ████████████████████████████████████████████████████████████████████████████
  */
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §1  LAZY LOADERS
+// §1  LAZY LOADERS  (local vendor pack → CDN fallback via AETHER_Vendor)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const _cache = {};
-async function _load(key, url) {
+
+function _vendor() {
+  try {
+    return (typeof globalThis !== 'undefined' && globalThis.AETHER_Vendor)
+      || (typeof window !== 'undefined' && window.AETHER_Vendor)
+      || null;
+  } catch { return null; }
+}
+
+async function _load(key, fallbackUrl) {
   if (_cache[key]) return _cache[key];
-  const m = await import(url);
-  _cache[key] = m.default || m;
-  return _cache[key];
+  const V = _vendor();
+  // Map skill keys → vendor catalog keys
+  const catalogKey = key === 'pptxgen' ? 'pptxgen' : key === 'pdf-lib' ? 'pdf-lib' : key;
+  if (V && typeof V.load === 'function') {
+    try {
+      const mod = await V.load(catalogKey);
+      _cache[key] = mod.default || mod;
+      return _cache[key];
+    } catch (e) {
+      console.warn('[Documents] vendor load failed for', key, '— trying direct CDN', e.message);
+    }
+  }
+  // Direct multi-CDN fallback
+  const urls = [fallbackUrl];
+  if (fallbackUrl.includes('esm.sh')) {
+    const pkg = fallbackUrl.replace('https://esm.sh/', '');
+    urls.push('https://cdn.jsdelivr.net/npm/' + pkg + '/+esm');
+  }
+  let lastErr;
+  for (const url of urls) {
+    try {
+      const m = await import(url);
+      _cache[key] = m.default || m;
+      return _cache[key];
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('Failed to load ' + key);
 }
 
 const loadDocx     = () => _load('docx',     'https://esm.sh/docx@8');
@@ -37,10 +71,20 @@ const loadPptxGen  = () => _load('pptxgen',  'https://esm.sh/pptxgenjs@3.12.0');
 const loadXLSX     = () => _load('xlsx',     'https://esm.sh/xlsx@0.18.5');
 const loadSQL      = async () => {
   if (_cache.sql) return _cache.sql;
+  const V = _vendor();
+  if (V && typeof V.loadSql === 'function') {
+    try {
+      _cache.sql = await V.loadSql();
+      return _cache.sql;
+    } catch (e) {
+      console.warn('[Documents] vendor sql failed', e.message);
+    }
+  }
   const init = (await import('https://esm.sh/sql.js@1.10.2')).default;
   _cache.sql = await init({ locateFile: f => `https://esm.sh/sql.js@1.10.2/dist/${f}` });
   return _cache.sql;
 };
+const loadPdfLib = () => _load('pdf-lib', 'https://esm.sh/pdf-lib@1.17.1');
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §2  SHARED HELPERS
@@ -53,18 +97,69 @@ const esc      = s  => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;'
 const cm       = i  => (i * 2.54).toFixed(3) + 'cm';
 
 function downloadBlob(blob, filename) {
+  if ('showSaveFilePicker' in window) {
+    try {
+      (async () => {
+        const handle = await window.showSaveFilePicker({ suggestedName: filename });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+      })();
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a   = Object.assign(document.createElement('a'), { href: url, download: filename });
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
 
+function _skillUtils() {
+  try {
+    return (typeof globalThis !== 'undefined' && globalThis.AETHER_SkillUtils)
+      || (typeof window !== 'undefined' && window.AETHER_SkillUtils)
+      || null;
+  } catch { return null; }
+}
+
 function extractSpec(text) {
+  const su = _skillUtils();
+  if (su?.parseWithRepair) {
+    const r = su.parseWithRepair(text, { requireKey: 'type' });
+    if (r?.spec) return r.spec;
+  } else if (su?.softParseSpec) {
+    const p = su.softParseSpec(text, { requireKey: 'type' });
+    if (p) return p;
+  }
   if (!text) return null;
-  for (const s of [text.trim(), text.replace(/```(?:json)?\s*([\s\S]*?)```/g,'$1').trim()]) {
-    try { const p = JSON.parse(s); if (p.type) return p; } catch {}
+  for (const s of [text.trim(), text.replace(/```(?:json)?\s*([\s\S]*?)```/gi,'$1').trim()]) {
+    try { const p = JSON.parse(s); if (p && p.type) return p; } catch {}
+  }
+  const m = String(text).match(/\{\s*"type"\s*:\s*"[^"]+"[\s\S]*\}/);
+  if (m) {
+    try {
+      let t = m[0].replace(/,\s*([}\]])/g, '$1');
+      const p = JSON.parse(t);
+      if (p.type) return p;
+    } catch {}
   }
   return null;
+}
+
+async function extractSpecAsync(text, opts = {}) {
+  const su = _skillUtils();
+  if (su?.parseWithRetry) {
+    const r = await su.parseWithRetry(text, {
+      requireKey: 'type',
+      skillHint: 'documents',
+      allowModelRepair: opts.allowModelRepair !== false,
+      callModel: opts.callModel,
+    });
+    return r?.spec || null;
+  }
+  return extractSpec(text);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -73,11 +168,30 @@ function extractSpec(text) {
 
 class ImageRegistry {
   constructor() { this._s = {}; }
-  async fromFile(file, id) {
-    const imageId = id || file.name.replace(/[^a-zA-Z0-9_-]/g,'_');
-    const base64  = await new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(file); });
-    const dims    = await new Promise(res => { const img=new Image(); img.onload=()=>res({width:img.naturalWidth,height:img.naturalHeight}); img.onerror=()=>res({width:0,height:0}); img.src=`data:${file.type};base64,${base64}`; });
-    this._s[imageId] = { id:imageId, filename:`${imageId}.${file.type.split('/')[1]||'png'}`, data:base64, mimeType:file.type, ...dims, size:file.size };
+  async fromFile(file, id, opts = {}) {
+    const imageId = id || file.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    let blob = file;
+    if (file.type.startsWith('image/') && file.size > 1024 * 1024 && opts.compress !== false) {
+      try {
+        const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+        const canvas = document.createElement('canvas');
+        const maxDim = opts.maxDim || 1920;
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const ratio = Math.min(maxDim / width, maxDim / height);
+          width = Math.round(width * ratio); height = Math.round(height * ratio);
+        }
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const quality = opts.quality || 0.85;
+        blob = await new Promise(res => canvas.toBlob(b => res(b), file.type, quality));
+        URL.revokeObjectURL(img.src);
+      } catch { blob = file; }
+    }
+    const base64  = await new Promise((res,rej) => { const r=new FileReader(); r.onload=()=>res(r.result.split(',')[1]); r.onerror=rej; r.readAsDataURL(blob); });
+    const dims    = await new Promise(res => { const img=new Image(); img.onload=()=>res({width:img.naturalWidth,height:img.naturalHeight}); img.onerror=()=>res({width:0,height:0}); img.src=`data:${blob.type};base64,${base64}`; });
+    this._s[imageId] = { id:imageId, filename:`${imageId}.${blob.type.split('/')[1]||'png'}`, data:base64, mimeType:blob.type, ...dims, size:blob.size };
     return imageId;
   }
   fromBase64(b64, mime, id) {
@@ -555,7 +669,163 @@ export async function readXlsx(file) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §8  SQL ENGINE
+// §8  PDF ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PDF_PAGE_SIZES = { letter: [612, 792], a4: [595.28, 841.89], legal: [612, 1008] };
+
+function _pdfAlign(align) {
+  const m = { left: 0, center: 1, right: 2, justify: 3 };
+  return m[align] !== undefined ? m[align] : 0;
+}
+
+async function _buildPdfDoc(spec) {
+  const { PDFDocument, rgb, StandardFonts } = await loadPdfLib();
+  const doc = await PDFDocument.create();
+  const theme = spec.theme || {};
+  const pageSize = spec.page?.size || 'letter';
+  const orientation = spec.page?.orientation || 'portrait';
+  let [pw, ph] = PDF_PAGE_SIZES[pageSize] || PDF_PAGE_SIZES.letter;
+  if (orientation === 'landscape') [pw, ph] = [ph, pw];
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const accent = theme.accentColor || '2E75B6';
+  const fontSize = theme.fontSize || 11;
+  const margin = 50;
+  const contentWidth = pw - 2 * margin;
+  let y = ph - margin;
+
+  function addText(text, opts = {}) {
+    const f = opts.bold ? bold : font;
+    const sz = opts.size || fontSize;
+    const color = opts.color || '#000000';
+    const c = rgb(parseInt(color.slice(0, 2), 16) / 255, parseInt(color.slice(2, 4), 16) / 255, parseInt(color.slice(4, 6), 16) / 255);
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (y < margin + 20) { const p = doc.addPage([pw, ph]); y = ph - margin; }
+      const words = line.split(' ');
+      let curLine = '';
+      for (const word of words) {
+        const test = curLine ? curLine + ' ' + word : word;
+        if (f.widthOfTextAtSize(test, sz) > contentWidth) {
+          doc.drawText(curLine, { x: margin, y, size: sz, font: f, color: c });
+          y -= sz * 1.4;
+          curLine = word;
+        } else { curLine = test; }
+      }
+      if (curLine) { doc.drawText(curLine, { x: margin, y, size: sz, font: f, color: c }); y -= sz * 1.4; }
+    }
+  }
+
+  // Cover page
+  if (spec.cover) {
+    const coverPage = doc.addPage([pw, ph]);
+    const coverY = ph - margin;
+    coverPage.drawText(spec.cover.title || '', { x: margin, y: coverY - 100, size: 32, font: bold, color: rgb(0.12, 0.22, 0.39) });
+    if (spec.cover.subtitle) coverPage.drawText(spec.cover.subtitle, { x: margin, y: coverY - 140, size: 18, font, color: rgb(0.33, 0.33, 0.33) });
+    if (spec.cover.author) coverPage.drawText(spec.cover.author, { x: margin, y: margin + 40, size: 14, font: bold, color: rgb(0, 0, 0) });
+    if (spec.cover.date) coverPage.drawText(spec.cover.date, { x: margin, y: margin + 20, size: 12, font, color: rgb(0.53, 0.53, 0.53) });
+    y = ph - margin;
+  }
+
+  // Body
+  for (const block of (spec.body || [])) {
+    if (y < margin + 30) { const p = doc.addPage([pw, ph]); y = ph - margin; }
+    switch (block.block) {
+      case 'heading': {
+        const sizes = { 1: 24, 2: 20, 3: 16, 4: 14 };
+        addText(block.text, { size: sizes[block.level] || 20, bold: true, color: block.level === 1 ? '1F3864' : accent });
+        y -= 4;
+        break;
+      }
+      case 'paragraph': {
+        addText(block.text || (block.runs || []).map(r => r.text).join(''), { size: fontSize });
+        y -= 4;
+        break;
+      }
+      case 'list': {
+        const items = block.items || [];
+        for (const item of items) {
+          if (y < margin + 20) { const p = doc.addPage([pw, ph]); y = ph - margin; }
+          const prefix = block.style === 'number' ? '1. ' : '• ';
+          doc.drawText(prefix + (typeof item === 'string' ? item : item.text || ''), { x: margin + 15, y, size: fontSize, font, color: rgb(0, 0, 0) });
+          y -= fontSize * 1.5;
+        }
+        break;
+      }
+      case 'spacer': { y -= (block.lines || 1) * fontSize; break; }
+      case 'pagebreak': { const p = doc.addPage([pw, ph]); y = ph - margin; break; }
+    }
+  }
+
+  const buffer = await doc.save();
+  return buffer;
+}
+
+export async function createPdf(spec) {
+  const buffer = await _buildPdfDoc(spec);
+  const blob = new Blob([buffer], { type: 'application/pdf' });
+  const filename = spec.meta?.filename || `${(spec.meta?.title || 'document').replace(/\s+/g, '-').toLowerCase()}.pdf`;
+  return { blob, filename, size: buffer.byteLength };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §9  EPUB ENGINE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EPUB_MIME = 'application/epub+zip';
+
+function _epubContainer() {
+  return `<?xml version="1.0" encoding="UTF-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>`;
+}
+
+function _epubOpf(spec, spineIds) {
+  const meta = spec.meta || {};
+  return `<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0"><metadata><dc:identifier id="bookid">${meta.isbn || 'urn:uuid:' + crypto.randomUUID()}</dc:identifier><dc:title>${esc(meta.title || 'Document')}</dc:title><dc:creator>${esc(meta.author || 'AETHER')}</dc:creator><dc:language>${meta.language || 'en'}</dc:language></metadata><manifest>${spineIds.map((id, i) => `<item id="${id}" href="${id}.xhtml" media-type="application/xhtml+xml"/>`).join('')}</manifest><spine>${spineIds.map(id => `<itemref idref="${id}"/>`).join('')}</spine></package>`;
+}
+
+function _epubChapter(id, blocks, theme) {
+  const font = theme?.font || 'Arial';
+  const body = blocks.map(block => {
+    switch (block.block) {
+      case 'heading': return `<h${block.level} style="font-family:${font};color:#1F3864">${esc(block.text)}</h${block.level}>`;
+      case 'paragraph': return `<p style="font-family:${font};line-height:1.6">${esc(block.text || '')}</p>`;
+      case 'list': return `<ul>${(block.items || []).map(i => `<li style="font-family:${font}">${esc(typeof i === 'string' ? i : i.text || '')}</li>`).join('')}</ul>`;
+      case 'spacer': return '<br/>'.repeat(block.lines || 1);
+      case 'pagebreak': return '<hr style="page-break-after:always"/>';
+      case 'divider': return '<hr style="border:0;border-top:1px solid #ccc"/>';
+      default: return '';
+    }
+  }).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><head><title>${esc(blocks[0]?.text || 'Chapter')}</title></head><body>${body}</body></html>`;
+}
+
+export async function createEpub(spec) {
+  const JSZip = await loadJSZip(), zip = new JSZip();
+  zip.file('mimetype', EPUB_MIME, { compression: 'STORE' });
+  zip.file('META-INF/container.xml', _epubContainer());
+  const theme = spec.theme || {};
+  const spineIds = [];
+  const chapters = (spec.body || []).reduce((acc, block) => {
+    if (block.block === 'heading' && block.level === 1) acc.push([]);
+    if (acc.length) acc[acc.length - 1].push(block);
+    else acc.push([block]);
+    return acc;
+  }, []);
+  chapters.forEach((blocks, i) => {
+    const id = `chapter_${i + 1}`;
+    spineIds.push(id);
+    zip.file(`OEBPS/${id}.xhtml`, _epubChapter(id, blocks, theme));
+  });
+  if (!spineIds.length) { spineIds.push('empty'); zip.file('OEBPS/empty.xhtml', _epubChapter('empty', [{ block: 'paragraph', text: '' }], theme)); }
+  zip.file('OEBPS/content.opf', _epubOpf(spec, spineIds));
+  const blob = await zip.generateAsync({ type: 'blob', mimeType: EPUB_MIME, compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  const filename = spec.meta?.filename || `${(spec.meta?.title || 'document').replace(/\s+/g, '-').toLowerCase()}.epub`;
+  return { blob, filename, size: blob.size };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §10  SQL ENGINE
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export async function createDatabase(spec) {
@@ -594,7 +864,64 @@ export function downloadCsv(csv,filename) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §9  TEMPLATE LIBRARY  (28 templates)
+// §11  MARKDOWN → DOCX CONVERTER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function markdownToSpec(md, opts = {}) {
+  const lines = md.split('\n');
+  const body = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trim = line.trim();
+    // Heading
+    const hMatch = trim.match(/^(#{1,4})\s+(.+)/);
+    if (hMatch) { body.push({ block: 'heading', level: hMatch[1].length, text: hMatch[2] }); i++; continue; }
+    // Horizontal rule
+    if (/^-{3,}$/.test(trim)) { body.push({ block: 'divider' }); i++; continue; }
+    // Unordered list
+    if (/^[\s]*[-*+]\s+/.test(trim)) {
+      const items = [];
+      while (i < lines.length && /^[\s]*[-*+]\s+/.test(lines[i].trim())) { items.push(lines[i].trim().replace(/^[-*+]\s+/, '')); i++; }
+      body.push({ block: 'list', style: 'bullet', items });
+      continue;
+    }
+    // Ordered list
+    if (/^\s*\d+[.)]\s+/.test(trim)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i].trim())) { items.push(lines[i].trim().replace(/^\d+[.)]\s+/, '')); i++; }
+      body.push({ block: 'list', style: 'number', items });
+      continue;
+    }
+    // Table
+    if (trim.includes('|') && trim.startsWith('|')) {
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) { rows.push(lines[i].trim().split('|').filter(Boolean).map(c => c.trim())); i++; }
+      if (rows.length >= 2) {
+        const headers = rows[0];
+        const data = rows.slice(2); // skip alignment row
+        body.push({ block: 'table', headers, rows: data, striped: true });
+      }
+      continue;
+    }
+    // Paragraph (skip empty lines)
+    if (trim) {
+      const para = { block: 'paragraph', text: trim.replace(/\*\*(.+?)\*\*/g, (_, t) => t).replace(/\*(.+?)\*/g, (_, t) => t) };
+      body.push(para);
+    }
+    i++;
+  }
+  return {
+    type: 'document', format: opts.format || 'docx',
+    meta: { title: opts.title || 'Converted Document', author: opts.author || 'AETHER', filename: opts.filename || 'converted.docx' },
+    page: { size: opts.pageSize || 'letter', margins: { top: 1, bottom: 1, left: 1.25, right: 1.25 } },
+    theme: { font: opts.font || 'Arial', fontSize: opts.fontSize || 12, accentColor: opts.accentColor || '2E75B6' },
+    body
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §12  TEMPLATE LIBRARY  (28 templates)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const TEMPLATES = {
@@ -628,8 +955,79 @@ export function fillTemplate(id,vars) {
   return JSON.parse(JSON.stringify(t.spec).replace(/\{\{([A-Z0-9_]+)\}\}/g,(_,k)=>vars[k]!==undefined?String(vars[k]):_));
 }
 
+export function validateTemplateVars(spec) {
+  const missing = [];
+  const found = new Set();
+  const allVars = [];
+
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(walk); return; }
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'string') {
+        const vars = v.match(/\{\{([A-Z0-9_]+)\}\}/g);
+        if (vars) vars.forEach(m => { const name = m.slice(2, -2); allVars.push(name); });
+      } else walk(v);
+    }
+  }
+
+  // Collect all vars that are provided (from meta, etc)
+  if (spec.meta) Object.keys(spec.meta).forEach(k => found.add(k.toUpperCase()));
+  if (spec.theme) Object.keys(spec.theme).forEach(k => found.add(k.replace(/([A-Z])/g, '_$1').toUpperCase()));
+
+  walk(spec);
+
+  for (const v of [...new Set(allVars)]) {
+    if (!found.has(v)) missing.push(v);
+  }
+  return { missing, total: [...new Set(allVars)].length };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// §10  UI CARDS
+// §12  CROSS-FORMAT CONVERTERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export async function convertCsvToXlsx(csvText, sheetName = 'Sheet1') {
+  const XLSX = await loadXLSX();
+  const rows = csvText.split('\n').filter(Boolean).map(r => r.split(',').map(c => c.replace(/^"|"$/g, '').trim()));
+  if (!rows.length) throw new Error('Empty CSV');
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  return { blob, filename: sheetName.toLowerCase().replace(/\s+/g, '-') + '.xlsx', size: buffer.byteLength };
+}
+
+export async function convertXlsxToCsv(file) {
+  const result = await readXlsx(file);
+  const csvParts = result.sheets.map(sheet => {
+    const rows = [sheet.headers.join(','), ...sheet.rows.map(r => r.map(c => {
+      const s = String(c ?? '');
+      return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(','))];
+    return { name: sheet.name, csv: rows.join('\n') };
+  });
+  return csvParts;
+}
+
+export async function convertDocxToOdt(file) {
+  const read = await readDocx(file);
+  const spec = {
+    type: 'document', format: 'odt', meta: { title: read.filename?.replace(/\.docx$/, '') || 'Converted', filename: read.filename?.replace(/\.docx$/, '.odt') || 'converted.odt' },
+    page: { size: 'letter', margins: { top: 1, bottom: 1, left: 1.25, right: 1.25 } },
+    theme: { font: 'Arial', fontSize: 12, accentColor: '2E75B6' },
+    body: (read.headings || []).map(h => ({ block: 'heading', level: h.level, text: h.text }))
+  };
+  if (read.text) {
+    const paras = read.text.split(/\n\n+/).filter(Boolean);
+    paras.forEach(p => spec.body.push({ block: 'paragraph', text: p.slice(0, 500) }));
+  }
+  return createOdt(spec);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §13  UI CARDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const FMT_ICONS={docx:'📄',odt:'📝',pptx:'📊',xlsx:'📈',sql:'🗄️',csv:'📋',db:'🗄️'};
@@ -660,90 +1058,209 @@ export function renderReadCard(result, container) {
 // §11  REBUILD FLOW
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export async function rebuild(file, instruction, apiKey, outputEl) {
-  const ext=file.name.split('.').pop().toLowerCase();
+export async function rebuild(file, instruction, apiConfig, outputEl) {
+  const ext = file.name.split('.').pop().toLowerCase();
   let readResult;
-  if(ext==='docx') readResult=await readDocx(file);
-  else if(ext==='xlsx') readResult=await readXlsx(file);
-  else if(ext==='db') readResult=await readDatabase(file);
+  if (ext === 'docx') readResult = await readDocx(file);
+  else if (ext === 'xlsx') readResult = await readXlsx(file);
+  else if (ext === 'db') readResult = await readDatabase(file);
   else throw new Error(`Unsupported rebuild format: .${ext}`);
 
-  let ctx=`Uploaded file: "${file.name}"\n\n`;
-  if(readResult.text) ctx+=`TEXT:\n${readResult.text.slice(0,6000)}\n\n`;
-  if(readResult.headings?.length) ctx+=`STRUCTURE:\n${readResult.headings.map(h=>`${'  '.repeat(h.level-1)}H${h.level}: ${h.text}`).join('\n')}\n\n`;
-  if(readResult.tables?.length) ctx+=`SHEETS:\n${readResult.tables.map(t=>`- ${t.name}: ${t.rowCount} rows`).join('\n')}\n\n`;
-  ctx+=`INSTRUCTION: ${instruction}\n\nOutput a complete new spec. Raw JSON only.`;
+  let ctx = `Uploaded file: "${file.name}"\n\n`;
+  if (readResult.text) ctx += `TEXT:\n${readResult.text.slice(0, 6000)}\n\n`;
+  if (readResult.headings?.length) ctx += `STRUCTURE:\n${readResult.headings.map(h => `${'  '.repeat(h.level - 1)}H${h.level}: ${h.text}`).join('\n')}\n\n`;
+  if (readResult.tables?.length) ctx += `SHEETS:\n${readResult.tables.map(t => `- ${t.name}: ${t.rowCount} rows`).join('\n')}\n\n`;
+  ctx += `INSTRUCTION: ${instruction}\n\nOutput a complete new spec. Raw JSON only.\n\n${SYSTEM_PROMPT}`;
 
-  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:4096,system:SYSTEM_PROMPT,messages:[{role:'user',content:ctx}]})});
-  const data=await r.json(); if(data.error) throw new Error(data.error.message);
-  const llmText=data.content.filter(b=>b.type==='text').map(b=>b.text).join('');
-  const spec=extractSpec(llmText); if(!spec) throw new Error('LLM did not return a valid spec');
+  const endpoint = apiConfig.endpoint || 'https://api.anthropic.com/v1/messages';
+  const model = apiConfig.model || 'claude-sonnet-4-20250514';
+  const key = apiConfig.apiKey;
+
+  const r = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(endpoint.includes('anthropic') ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' } : { 'Authorization': `Bearer ${key}` }) },
+    body: JSON.stringify({
+      model,
+      max_tokens: apiConfig.maxTokens || 4096,
+      ...(endpoint.includes('anthropic') ? { system: SYSTEM_PROMPT, messages: [{ role: 'user', content: ctx }] } : { messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: ctx }] })
+    })
+  });
+  if (!r.ok) throw new Error(`API ${r.status}: ${await r.text()}`);
+  const data = await r.json();
+  const llmText = endpoint.includes('anthropic')
+    ? data.content.filter(b => b.type === 'text').map(b => b.text).join('')
+    : (data.choices?.[0]?.message?.content || '');
+  const spec = extractSpec(llmText);
+  if (!spec) throw new Error('LLM did not return a valid spec — try a shorter instruction or another model');
+  const su = _skillUtils();
+  su?.kernelLog?.('documents.rebuild', file.name + ' → ' + (spec.type || '?'), 'write');
   return execute(spec, outputEl);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §12  MAIN EXECUTE
+// §14  MAIN EXECUTE
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Spec types accepted by execute / chat bridge */
+export const SUPPORTED_SPEC_TYPES = [
+  'document', 'presentation', 'spreadsheet', 'database',
+  'epub', 'markdown', 'convert', 'use-template',
+];
+
 export async function execute(input, outputEl) {
-  if(input instanceof File) {
-    const ext=input.name.split('.').pop().toLowerCase();
-    let result;
-    if(ext==='docx') result=await readDocx(input);
-    else if(ext==='xlsx'||ext==='csv') result=await readXlsx(input);
-    else if(ext==='db') result=await readDatabase(input);
-    else throw new Error(`Unsupported read format: .${ext}`);
-    result.filename=input.name; result.size=input.size;
-    if(outputEl) renderReadCard(result,outputEl);
-    return {type:'read',...result};
+  // Allow raw model text
+  if (typeof input === 'string') {
+    const parsed = extractSpec(input);
+    if (!parsed) throw new Error('Invalid documents spec: could not parse JSON type');
+    input = parsed;
   }
-  if(input?.type==='use-template') { const spec=fillTemplate(input.templateId,input.variables||{}); return execute(spec,outputEl); }
-  if(input?.type==='document') { const imgs=imageRegistry.toObject(); const result=input.format==='odt'?await createOdt(input,imgs):await createDocx(input,imgs); if(outputEl) renderResultCard(result,outputEl); return {type:'created',...result}; }
-  if(input?.type==='presentation') { const imgs=imageRegistry.toObject(); const result=await createPptx(input,imgs); if(outputEl) renderResultCard(result,outputEl); return {type:'created',...result}; }
-  if(input?.type==='spreadsheet') { const result=await createXlsx(input); if(outputEl) renderResultCard(result,outputEl); return {type:'created',...result}; }
-  if(input?.type==='database') { const result=await createDatabase(input); if(outputEl) renderResultCard(result,outputEl); return {type:'created',...result}; }
-  throw new Error(`Unknown input type: ${input?.type}`);
+
+  const su = _skillUtils();
+  const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  const label = input instanceof File
+    ? 'read:' + input.name
+    : (input?.type || 'unknown') + (input?.format ? '/' + input.format : '');
+  const startedFlight = su?.kernelFlight?.('documents', label);
+  su?.kernelLog?.('documents.execute', String(label).slice(0, 100), 'write');
+
+  try {
+    let out;
+    if (input instanceof File) {
+      const ext = input.name.split('.').pop().toLowerCase();
+      let result;
+      if (ext === 'docx') result = await readDocx(input);
+      else if (ext === 'xlsx' || ext === 'csv') result = await readXlsx(input);
+      else if (ext === 'db') result = await readDatabase(input);
+      else if (ext === 'pdf') {
+        result = { filename: input.name, size: input.size, text: 'PDF text extraction not yet supported in browser — use OCR skill or convert externally' };
+      }
+      else throw new Error(`Unsupported read format: .${ext}`);
+      result.filename = input.name; result.size = input.size;
+      if (outputEl) renderReadCard(result, outputEl);
+      out = { type: 'read', ...result };
+    } else if (input?.type === 'use-template') {
+      const spec = fillTemplate(input.templateId, input.variables || {});
+      out = await execute(spec, outputEl);
+    } else if (input?.type === 'markdown') {
+      const spec = markdownToSpec(input.markdown, input.options || {});
+      out = await execute(spec, outputEl);
+    } else if (input?.type === 'document') {
+      const imgs = imageRegistry.toObject();
+      const result = input.format === 'odt' ? await createOdt(input, imgs)
+        : input.format === 'pdf' ? await createPdf(input)
+        : await createDocx(input, imgs);
+      if (outputEl) renderResultCard(result, outputEl);
+      out = { type: 'created', ...result };
+    } else if (input?.type === 'presentation') {
+      const imgs = imageRegistry.toObject();
+      const result = await createPptx(input, imgs);
+      if (outputEl) renderResultCard(result, outputEl);
+      out = { type: 'created', ...result };
+    } else if (input?.type === 'spreadsheet') {
+      const result = await createXlsx(input);
+      if (outputEl) renderResultCard(result, outputEl);
+      out = { type: 'created', ...result };
+    } else if (input?.type === 'database') {
+      const result = await createDatabase(input);
+      if (outputEl) renderResultCard(result, outputEl);
+      out = { type: 'created', ...result };
+    } else if (input?.type === 'epub') {
+      const result = await createEpub(input);
+      if (outputEl) renderResultCard(result, outputEl);
+      out = { type: 'created', ...result };
+    } else if (input?.type === 'convert') {
+      if (input.from === 'csv' && input.to === 'xlsx') {
+        const result = await convertCsvToXlsx(input.data, input.sheetName);
+        if (outputEl) renderResultCard(result, outputEl);
+        out = { type: 'created', ...result };
+      } else if (input.from === 'docx' && input.to === 'odt') {
+        const result = await convertDocxToOdt(input.file);
+        if (outputEl) renderResultCard(result, outputEl);
+        out = { type: 'created', ...result };
+      } else if (input.from === 'xlsx' && input.to === 'csv') {
+        // Accept base64 or raw sheet data via convert path when provided as data string
+        throw new Error('xlsx→csv: pass a File to readXlsx or use convertXlsxToCsv(file)');
+      } else {
+        throw new Error(`Unsupported conversion: ${input.from} → ${input.to}`);
+      }
+    } else {
+      throw new Error(`Unknown input type: ${input?.type}. Supported: ${SUPPORTED_SPEC_TYPES.join(', ')}`);
+    }
+
+    const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+    su?.kernelLog?.('documents.execute.ok', (out?.type || 'done') + ' · ' + ms + 'ms', 'write', { ok: true, ms });
+    if (startedFlight) su?.kernelEnd?.('landed');
+    return out;
+  } catch (e) {
+    const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+    su?.kernelLog?.('documents.execute.ERR', e.message || String(e), 'write', { ok: false, ms });
+    if (startedFlight) su?.kernelEnd?.('aborted');
+    throw e;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §13  SYSTEM PROMPT
+// §15  SYSTEM PROMPT
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const SYSTEM_PROMPT = `You are Documents Supremacy — the most advanced browser-native document engine.
 Create, read, and rebuild professional documents in any format. No server required.
 
-FORMATS: docx | odt | pptx | xlsx | sql
+FORMATS: docx | odt | pptx | xlsx | sql | pdf | epub | md
 
 OUTPUT RULE: When creating a document respond ONLY with raw JSON. No fences. No explanation.
 
-DOCUMENT (docx/odt): { "type":"document","format":"docx","meta":{"title":"...","author":"...","filename":"out.docx"},"page":{"size":"letter","orientation":"portrait","margins":{"top":1,"bottom":1,"left":1.25,"right":1.25}},"theme":{"font":"Arial","fontSize":12,"accentColor":"2E75B6"},"cover":{"title":"...","subtitle":"...","author":"...","date":"..."},"header":{"left":"...","right":"...","showPageNumber":false},"footer":{"left":"...","showPageNumber":true},"body":[{"block":"heading","level":1,"text":"..."},{"block":"paragraph","text":"..."},{"block":"paragraph","runs":[{"text":"bold","bold":true},{"text":" link","link":"https://..."},{"footnote":"footnote text"}]},{"block":"list","style":"bullet","items":["A","B"]},{"block":"list","style":"number","items":["1","2"]},{"block":"table","headers":["A","B"],"rows":[["1","2"]],"headerColor":"2E75B6","striped":true,"widths":[50,50]},{"block":"callout","style":"info","text":"..."},{"block":"divider"},{"block":"spacer","lines":1},{"block":"pagebreak"},{"block":"columns","count":2,"content":[{"block":"paragraph","text":"left"},{"block":"paragraph","text":"right"}]}]}
+DOCUMENT (docx/odt/pdf): { "type":"document","format":"docx","meta":{"title":"...","author":"...","filename":"out.docx"},"page":{"size":"letter","orientation":"portrait","margins":{"top":1,"bottom":1,"left":1.25,"right":1.25}},"theme":{"font":"Arial","fontSize":12,"accentColor":"2E75B6"},"cover":{"title":"...","subtitle":"...","author":"...","date":"..."},"header":{"left":"...","right":"...","showPageNumber":false},"footer":{"left":"...","showPageNumber":true},"body":[{"block":"heading","level":1,"text":"..."},{"block":"paragraph","text":"..."},{"block":"paragraph","runs":[{"text":"bold","bold":true},{"text":" link","link":"https://..."},{"footnote":"footnote text"}]},{"block":"list","style":"bullet","items":["A","B"]},{"block":"list","style":"number","items":["1","2"]},{"block":"table","headers":["A","B"],"rows":[["1","2"]],"headerColor":"2E75B6","striped":true,"widths":[50,50]},{"block":"callout","style":"info","text":"..."},{"block":"divider"},{"block":"spacer","lines":1},{"block":"pagebreak"},{"block":"columns","count":2,"content":[{"block":"paragraph","text":"left"},{"block":"paragraph","text":"right"}]}]}
+
+EPUB: { "type":"epub","meta":{"title":"...","author":"...","filename":"book.epub"},"theme":{"font":"Arial"},"body":[same block format as document]}
+
+MARKDOWN: { "type":"markdown","markdown":"# Title\\n\\nParagraph text","options":{"title":"Doc","format":"docx"}}
+
+CONVERT: { "type":"convert","from":"csv","to":"xlsx","data":"col1,col2\\nval1,val2","sheetName":"Data"}
 
 PRESENTATION (pptx): { "type":"presentation","format":"pptx","meta":{"title":"...","filename":"deck.pptx"},"theme":{"accentColor":"2E75B6","darkColor":"1F3864"},"slides":[{"type":"title","title":"...","subtitle":"..."},{"type":"content","title":"...","content":["bullet 1","bullet 2"]},{"type":"stats","title":"...","stats":[{"value":"94%","label":"Label"}]},{"type":"two-col","title":"...","left":["..."],"right":"..."},{"type":"quote","quote":"...","attribution":"..."},{"type":"section","title":"..."},{"type":"chart","title":"...","chartType":"bar","labels":["Q1","Q2"],"datasets":[{"label":"Rev","data":[100,120],"color":"2E75B6"}]},{"type":"closing","title":"Thanks","contact":"..."}]}
 
 SPREADSHEET (xlsx): { "type":"spreadsheet","format":"xlsx","meta":{"title":"...","filename":"data.xlsx"},"sheets":[{"name":"Sheet1","type":"data","headerColor":"2E75B6","striped":true,"totals":true,"columns":[{"header":"Name","key":"name","width":24},{"header":"Amount","key":"amount","width":16,"format":"$#,##0.00"}],"rows":[{"name":"Row 1","amount":1250}]},{"name":"Summary","type":"summary","blocks":[{"type":"title","text":"Summary"},{"type":"kv","data":{"Total":"=SUM(Sheet1!B:B)"}}]}]}
 
-DATABASE (sql): { "type":"database","format":"sql","meta":{"title":"...","filename":"data.db"},"tables":[{"name":"users","columns":[{"name":"id","type":"INTEGER","primaryKey":true,"autoIncrement":true},{"name":"name","type":"TEXT","notNull":true},{"name":"email","type":"TEXT","unique":true},{"name":"created_at","type":"DATETIME","default":"CURRENT_TIMESTAMP"}],"rows":[{"name":"Alice","email":"alice@example.com"}],"indexes":[{"name":"idx_email","columns":["email"],"unique":true}],"foreignKeys":[]}],"sql":["CREATE VIEW IF NOT EXISTS ..."]}
+DATABASE (sql): { "type":"database","format":"sql","meta":{"title":"...","filename":"data.db"},"tables":[{"name":"users","columns":[{"name":"id","type":"INTEGER","primaryKey":true,"autoIncrement":true},{"name":"name","type":"TEXT","notNull":true},{"name":"email","type":"TEXT","unique":true}],"rows":[{"name":"Alice","email":"alice@example.com"}]}]}
 
 TEMPLATES (use-template): { "type":"use-template","templateId":"business-report","variables":{"TITLE":"...","AUTHOR":"...","DATE":"..."} }
 Available: business-report | legal-contract | project-proposal | meeting-minutes | invoice | cover-letter | nda | technical-spec | pitch-deck | project-update | training-deck | budget-tracker | project-tracker | invoice-tracker | crm | inventory | task-tracker
 
-RULES: Output only JSON. Never use \\n in text. Table widths[] must sum to 100. Always include meta.filename.`;
+RULES: Output only JSON. Format docx|odt|pdf for documents. Include meta.filename.`;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// §14  SKILL DEFINITION
+// §16  SKILL DEFINITION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DocumentsSupremacy = {
-  name:'documents-supremacy', version:'1.0.0',
-  description:'Create, read, and rebuild Word, ODT, PowerPoint, Excel, and SQLite database files entirely in the browser',
-  category:'documents', tier:'utility',
-  formats:['docx','odt','pptx','xlsx','sql','csv','db'],
-  templateCount:Object.keys(TEMPLATES).length,
-  triggers:['word document','word doc','.docx','docx','write a report','create a report','write a memo','write a letter','draft a letter','write a contract','create a template','business report','professional document','formal document','.odt','odt','openDocument','libreoffice','presentation','slide deck','slides','pitch deck','.pptx','pptx','powerpoint','spreadsheet','excel','.xlsx','xlsx','budget','tracker','workbook','data table','financial model','database','sql','.db','sqlite','create a database','schema','summarize this document','read this file','analyze this file','extract text','rewrite this document','update this report','modify this file','rebuild this'],
-  systemPrompt:SYSTEM_PROMPT,
-  tools:{execute,rebuild,createDocx,readDocx,createOdt,createPptx,createXlsx,readXlsx,createDatabase,readDatabase,downloadCsv,imageRegistry,templates:{getTemplate,searchTemplates,fillTemplate,all:TEMPLATES}},
-  ui:{renderResult:renderResultCard,renderRead:renderReadCard},
-  execute, extractSpec, downloadBlob,
+  name: 'documents-supremacy', version: '1.3.0',
+  description: 'Create, read, and rebuild Word, ODT, PowerPoint, Excel, SQLite, PDF, and EPUB in-browser. Offline vendor pack + truncated-JSON model repair.',
+  category: 'documents', tier: 'utility',
+  formats: ['docx', 'odt', 'pptx', 'xlsx', 'sql', 'csv', 'db', 'pdf', 'epub', 'md'],
+  supportedSpecTypes: SUPPORTED_SPEC_TYPES,
+  templateCount: Object.keys(TEMPLATES).length,
+  triggers: ['word document', 'word doc', '.docx', 'docx', 'write a report', 'create a report', 'write a memo', 'write a letter', 'draft a letter', 'write a contract', 'create a template', 'business report', 'professional document', 'formal document', '.odt', 'odt', 'openDocument', 'libreoffice', 'presentation', 'slide deck', 'slides', 'pitch deck', '.pptx', 'pptx', 'powerpoint', 'spreadsheet', 'excel', '.xlsx', 'xlsx', 'budget', 'tracker', 'workbook', 'data table', 'financial model', 'database', 'sql', '.db', 'sqlite', 'create a database', 'schema', 'summarize this document', 'read this file', 'analyze this file', 'extract text', 'rewrite this document', 'update this report', 'modify this file', 'rebuild this', '.pdf', 'pdf', 'create a pdf', 'generate pdf', '.epub', 'epub', 'ebook', 'markdown', 'convert csv to excel', 'convert docx to odt'],
+  systemPrompt: SYSTEM_PROMPT,
+  skillMd: `# Documents Supremacy v1.3
+
+## Formats
+docx · odt · pptx · xlsx · sql/db · pdf · epub · md · csv convert
+
+## Spec types
+document · presentation · spreadsheet · database · epub · markdown · convert · use-template
+
+## Integration
+- Soft-parse + aggressive repair + optional model repair for truncated JSON
+- Offline vendor pack: ./vendor/ (see vendor/README.md) then CDN
+- Kernel flight logs on every execute/rebuild
+
+## Rebuild
+Upload .docx / .xlsx / .db + instruction → new generated artifact
+`,
+  tools: { execute, rebuild, createDocx, readDocx, createOdt, createPptx, createXlsx, readXlsx, createDatabase, readDatabase, createPdf, createEpub, markdownToSpec, convertCsvToXlsx, convertXlsxToCsv, convertDocxToOdt, validateTemplateVars, downloadCsv, imageRegistry, templates: { getTemplate, searchTemplates, fillTemplate, all: TEMPLATES } },
+  ui: { renderResult: renderResultCard, renderRead: renderReadCard },
+  execute, extractSpec, extractSpecAsync, downloadBlob, SUPPORTED_SPEC_TYPES,
 };
 
 export default DocumentsSupremacy;

@@ -1,17 +1,19 @@
 /**
  * ████████████████████████████████████████████████████████████████████████████
  *
- *   AETHER DISCOVERY SKILL  —  v1.0.0
+ *   AETHER DISCOVERY SKILL  —  v1.2.0
  *   Single-file browser-native search, images, maps, and weather engine.
  *
  *   Search  :  Tavily → Serper → Brave  (priority fallback chain)
+ *   News    :  Brave → Serper → Tavily (v1.2)
  *   Images  :  Masonry grid + lightbox + lazy load + download
  *   Maps    :  Leaflet + CartoDB tiles (free, no API key)
  *   Weather :  Open-Meteo (free, no key) + OpenWeatherMap fallback
+ *   v1.3    :  soft parse + model repair retry · host key sync · Kernel logs
  *
  *   Usage:
  *     import DiscoverySkill, { KeyStore } from './discovery-skill.js'
- *     KeyStore.set('tavily', 'tvly-...')
+ *     KeyStore.set('tavily', 'tvly-...')  // or sync from AETHER hooks
  *     const spec = DiscoverySkill.extractSpec(llmResponse)
  *     await DiscoverySkill.execute(spec, container)
  *
@@ -25,10 +27,66 @@
 export class KeyStore {
   static _k={};
   static set(p,k)  { this._k[p]=k; try{localStorage.setItem(`aether_key_${p}`,k);}catch{} }
-  static get(p)    { return this._k[p]||(() => { try{return localStorage.getItem(`aether_key_${p}`);}catch{return null;} })(); }
+  static get(p)    {
+    if (this._k[p]) return this._k[p];
+    try {
+      // Prefer host-synced keys; never invent plaintext from encrypted vaults
+      const v = localStorage.getItem(`aether_key_${p}`)
+        || localStorage.getItem(`aether_hook_${p}`)
+        || localStorage.getItem(p);
+      if (v) this._k[p] = v;
+      return v || null;
+    } catch { return null; }
+  }
   static has(p)    { return !!this.get(p); }
-  static available(){ return ['tavily','serper','brave'].filter(p=>this.has(p)); }
+  static available(){ return ['tavily','serper','brave','openweather'].filter(p=>this.has(p)); }
+  /** Pull keys from AETHER host (hooksConfig / skill-utils) */
+  static syncFromHost() {
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.AETHER_SkillUtils?.syncKeysFromHost) {
+        globalThis.AETHER_SkillUtils.syncKeysFromHost(KeyStore);
+      } else if (typeof window !== 'undefined' && window.AETHER_SkillUtils?.syncKeysFromHost) {
+        window.AETHER_SkillUtils.syncKeysFromHost(KeyStore);
+      }
+      const hooks = (typeof window !== 'undefined' && (window.hooksConfig || window.__AETHER_HOOKS)) || null;
+      if (hooks) {
+        if (hooks.tavily) KeyStore.set('tavily', hooks.tavily);
+        if (hooks.serper) KeyStore.set('serper', hooks.serper);
+        if (hooks.brave) KeyStore.set('brave', hooks.brave);
+        if (hooks.openweather || hooks.openWeather) KeyStore.set('openweather', hooks.openweather || hooks.openWeather);
+      }
+    } catch {}
+  }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §1.5  RESPONSE CACHE  (localStorage with TTL)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes default
+
+export const cache = {
+  _prefix: 'aether_cache_',
+  get(key) {
+    try {
+      const raw = localStorage.getItem(this._prefix + key);
+      if (!raw) return null;
+      const entry = JSON.parse(raw);
+      if (Date.now() > entry.expires) { localStorage.removeItem(this._prefix + key); return null; }
+      return entry.data;
+    } catch { return null; }
+  },
+  set(key, data, ttl = CACHE_TTL) {
+    try {
+      localStorage.setItem(this._prefix + key, JSON.stringify({ data, expires: Date.now() + ttl }));
+    } catch {}
+  },
+  clear() {
+    try {
+      Object.keys(localStorage).filter(k => k.startsWith(this._prefix)).forEach(k => localStorage.removeItem(k));
+    } catch {}
+  }
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §2  SEARCH ENGINE  (Tavily → Serper → Brave)
@@ -95,9 +153,76 @@ async function _braveImages(query,opts={}) {
   return (d.results||[]).map(img=>({url:img.url,thumb:img.thumbnail?.src,title:img.title,source:img.source,width:img.properties?.width,height:img.properties?.height,provider:'brave'}));
 }
 
-export const webSearch   = (q,o={}) => _withFallback([()=>_tavilySearch(q,o),()=>_serperSearch(q,o),()=>_braveSearch(q,o)],'web search');
-export const imageSearch = (q,o={}) => _withFallback([()=>_tavilyImages(q,o),()=>_serperImages(q,o),()=>_braveImages(q,o)],'image search');
-export const placeSearch = (q,o={}) => _withFallback([()=>_serperPlaces(q,o),async()=>{ const r=await _braveSearch(`${q} location address`,o); return r.results.slice(0,5).map(i=>({name:i.title,address:i.snippet?.match(/\d+[^,]+,[^,]+/)?.[0]||'',rating:null,reviews:null,lat:null,lng:null,provider:'brave-fallback'})); }],'place search');
+async function _braveNews(query, opts = {}) {
+  const key = KeyStore.get('brave');
+  if (!key) throw new Error('No Brave key');
+  const params = new URLSearchParams({ q: query, count: opts.limit || 8, search_lang: opts.lang || 'en', freshness: opts.freshness || 'day' });
+  const r = await fetch(`https://api.search.brave.com/res/v1/news/search?${params}`, { headers: { 'Accept': 'application/json', 'X-Subscription-Token': key } });
+  if (!r.ok) throw new Error(`Brave news ${r.status}`);
+  const d = await r.json();
+  return { provider: 'brave-news', query, results: (d.results || []).map(i => ({ title: i.title, url: i.url, snippet: i.description, source: i.source, published: i.age, thumbnail: i.thumbnail?.src, provider: 'brave-news' })) };
+}
+
+/** Serper news fallback (Google News via Serper) */
+async function _serperNews(query, opts = {}) {
+  const key = KeyStore.get('serper'); if (!key) throw new Error('No Serper key');
+  const r = await fetch('https://google.serper.dev/news', {
+    method: 'POST',
+    headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ q: query, num: opts.limit || 8 }),
+  });
+  if (!r.ok) throw new Error(`Serper news ${r.status}`);
+  const d = await r.json();
+  return {
+    provider: 'serper-news',
+    query,
+    results: (d.news || []).map(i => ({
+      title: i.title, url: i.link, snippet: i.snippet, source: i.source,
+      published: i.date, thumbnail: i.imageUrl, provider: 'serper-news',
+    })),
+  };
+}
+
+/** Tavily as last-resort news (web search biased to recent) */
+async function _tavilyNews(query, opts = {}) {
+  const key = KeyStore.get('tavily'); if (!key) throw new Error('No Tavily key');
+  const r = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: key,
+      query: query + ' news',
+      search_depth: opts.depth || 'basic',
+      topic: 'news',
+      max_results: opts.limit || 8,
+      include_answer: true,
+    }),
+  });
+  if (!r.ok) throw new Error(`Tavily news ${r.status}`);
+  const d = await r.json();
+  return {
+    provider: 'tavily-news',
+    query,
+    answer: d.answer || null,
+    results: (d.results || []).map(i => ({
+      title: i.title, url: i.url, snippet: i.content, source: i.url,
+      published: i.published_date, provider: 'tavily-news',
+    })),
+  };
+}
+
+async function _cachedSearch(fn, cacheKey, query, opts) {
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+  const result = await fn(query, opts);
+  cache.set(cacheKey, result);
+  return result;
+}
+
+export const webSearch = (q, o = {}) => { KeyStore.syncFromHost(); return _cachedSearch(() => _withFallback([() => _tavilySearch(q, o), () => _serperSearch(q, o), () => _braveSearch(q, o)], 'web search'), 'web_' + q + '_' + (o.limit || 8), q, o); };
+export const imageSearch = (q, o = {}) => { KeyStore.syncFromHost(); return _cachedSearch(() => _withFallback([() => _tavilyImages(q, o), () => _serperImages(q, o), () => _braveImages(q, o)], 'image search'), 'img_' + q + '_' + (o.limit || 12), q, o); };
+export const newsSearch = (q, o = {}) => { KeyStore.syncFromHost(); return _cachedSearch(() => _withFallback([() => _braveNews(q, o), () => _serperNews(q, o), () => _tavilyNews(q, o)], 'news search'), 'news_' + q + '_' + (o.limit || 8), q, o); };
+export const placeSearch = (q, o = {}) => { KeyStore.syncFromHost(); return _cachedSearch(() => _withFallback([() => _serperPlaces(q, o), async () => { const r = await _braveSearch(`${q} location address`, o); return r.results.slice(0, 5).map(i => ({ name: i.title, address: i.snippet?.match(/\d+[^,]+,[^,]+/)?.[0] || '', rating: null, reviews: null, lat: null, lng: null, provider: 'brave-fallback' })); }], 'place search'), 'plc_' + q + '_' + (o.limit || 8), q, o); };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §3  WEATHER ENGINE  (Open-Meteo primary, OpenWeatherMap fallback)
@@ -141,6 +266,31 @@ export async function fetchWeather(location, opts={}) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// §3.5  WEATHER ALERTS  (NWS — US only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export async function fetchWeatherAlerts(lat, lng) {
+  try {
+    const pointR = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lng.toFixed(4)}`, { headers: { 'User-Agent': 'AETHER/1.0' } });
+    if (!pointR.ok) return [];
+    const point = await pointR.json();
+    const alertsR = await fetch(`https://api.weather.gov/alerts/active?zone=${point.properties.county}`, { headers: { 'User-Agent': 'AETHER/1.0' } });
+    if (!alertsR.ok) return [];
+    const alerts = await alertsR.json();
+    return (alerts.features || []).map(f => ({
+      id: f.properties.id,
+      headline: f.properties.headline,
+      severity: f.properties.severity,
+      urgency: f.properties.urgency,
+      description: f.properties.description?.slice(0, 500),
+      instruction: f.properties.instruction,
+      expires: f.properties.expires,
+      event: f.properties.event
+    }));
+  } catch { return []; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // §4  MAP ENGINE  (Leaflet + OpenStreetMap, no API key)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -168,11 +318,30 @@ function _popup(place,index) {
   return `<div style="font-family:system-ui;min-width:180px;max-width:240px;padding:4px"><div style="font-size:13px;font-weight:600;color:#111;margin-bottom:2px">${index!==undefined?`<span style="color:#2E75B6">${index+1}.</span> `:''}${place.name}</div>${place.type?`<div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.05em">${place.type}</div>`:''} ${stars?`<div style="color:#F9A825;font-size:12px">${stars} <span style="color:#666;font-size:11px">${place.rating} (${(place.reviews||0).toLocaleString()})</span></div>`:''} ${place.address?`<div style="font-size:11px;color:#666;margin-top:4px">📍 ${place.address}</div>`:''} ${place.website?`<a href="${place.website}" target="_blank" style="font-size:11px;color:#2E75B6;margin-top:4px;display:block">🌐 Website</a>`:''}</div>`;
 }
 
-async function _geocodePlace(name,address) {
-  const q=[name,address].filter(Boolean).join(', ');
-  const r=await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,{headers:{'User-Agent':'AETHER/1.0'}});
-  const d=await r.json();
-  return d.length?{lat:parseFloat(d[0].lat),lng:parseFloat(d[0].lon)}:null;
+const _nomQueue = [];
+let _nomRunning = false;
+
+async function _processNomQueue() {
+  if (_nomRunning || !_nomQueue.length) return;
+  _nomRunning = true;
+  while (_nomQueue.length) {
+    const { q, resolve, reject } = _nomQueue.shift();
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`, { headers: { 'User-Agent': 'AETHER/1.0' } });
+      const d = await r.json();
+      resolve(d.length ? { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) } : null);
+    } catch (e) { reject(e); }
+    await new Promise(r => setTimeout(r, 1100)); // 1.1s between requests
+  }
+  _nomRunning = false;
+}
+
+async function _geocodePlace(name, address) {
+  const q = [name, address].filter(Boolean).join(', ');
+  return new Promise((resolve, reject) => {
+    _nomQueue.push({ q, resolve, reject });
+    _processNomQueue();
+  });
 }
 
 function _tiles(L,map) {
@@ -180,17 +349,35 @@ function _tiles(L,map) {
   L.control.attribution({prefix:false,position:'bottomright'}).addAttribution('© <a href="https://carto.com">CARTO</a> © <a href="https://openstreetmap.org">OSM</a>').addTo(map);
 }
 
-export async function renderPlacesMap(places,container,opts={}) {
-  const L=await _ensureLeaflet(); _destroyMap(container);
-  container.style.cssText=`width:100%;height:${opts.height||420}px;border-radius:12px;overflow:hidden;border:0.5px solid var(--color-border-tertiary,#e0e0e0);background:#f0ede6;`;
-  const geocoded=await Promise.all(places.map(async p=>{ if(p.lat&&p.lng) return p; const c=await _geocodePlace(p.name,p.address).catch(()=>null); return c?{...p,...c}:null; }));
-  const valid=geocoded.filter(p=>p?.lat&&p?.lng);
-  if(!valid.length) { container.innerHTML=`<div style="display:flex;align-items:center;justify-content:center;height:100%;font-family:system-ui;color:#888;font-size:13px">No locations could be mapped</div>`; return; }
-  const map=L.map(container,{zoomControl:true,attributionControl:false}); _mapInstances.set(container,map); _tiles(L,map);
-  const bounds=L.latLngBounds(), colors=['#2E75B6','#7F77DD','#1D9E75','#BA7517','#D85A30','#E24B4A'];
-  valid.forEach((p,i)=>{ const color=opts.colorByType?_catColor(p.type):colors[i%colors.length]; L.marker([p.lat,p.lng],{icon:_pinIcon(L,color,String(i+1))}).bindPopup(_popup(p,i),{maxWidth:260}).addTo(map); bounds.extend([p.lat,p.lng]); });
-  valid.length===1?map.setView([valid[0].lat,valid[0].lng],opts.zoom||15):map.fitBounds(bounds,{padding:[40,40]});
-  return {map,places:valid};
+export async function renderPlacesMap(places, container, opts = {}) {
+  const L = await _ensureLeaflet(); _destroyMap(container);
+  container.style.cssText = `width:100%;height:${opts.height || 420}px;border-radius:12px;overflow:hidden;border:0.5px solid var(--color-border-tertiary,#e0e0e0);background:#f0ede6;`;
+  const geocoded = await Promise.all(places.map(async p => { if (p.lat && p.lng) return p; const c = await _geocodePlace(p.name, p.address).catch(() => null); return c ? { ...p, ...c } : null; }));
+  const valid = geocoded.filter(p => p?.lat && p?.lng);
+  if (!valid.length) { container.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;font-family:system-ui;color:#888;font-size:13px">No locations could be mapped</div>`; return; }
+  const map = L.map(container, { zoomControl: true, attributionControl: false }); _mapInstances.set(container, map); _tiles(L, map);
+  const bounds = L.latLngBounds(), colors = ['#2E75B6', '#7F77DD', '#1D9E75', '#BA7517', '#D85A30', '#E24B4A'];
+
+  // Use marker clustering for 15+ markers
+  if (valid.length >= 15) {
+    try {
+      if (!window.L.markerClusterGroup) {
+        const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css'; document.head.appendChild(css);
+        const css2 = document.createElement('link'); css2.rel = 'stylesheet'; css2.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css'; document.head.appendChild(css2);
+        await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+      }
+      const mcg = L.markerClusterGroup({ chunkedLoading: true, maxClusterRadius: 50, spiderfyOnMaxZoom: true, showCoverageOnHover: false });
+      valid.forEach((p, i) => { const color = opts.colorByType ? _catColor(p.type) : colors[i % colors.length]; const marker = L.marker([p.lat, p.lng], { icon: _pinIcon(L, color, String(i + 1)) }).bindPopup(_popup(p, i), { maxWidth: 260 }); mcg.addLayer(marker); bounds.extend([p.lat, p.lng]); });
+      map.addLayer(mcg);
+    } catch {
+      // fallback to individual markers
+      valid.forEach((p, i) => { const color = opts.colorByType ? _catColor(p.type) : colors[i % colors.length]; L.marker([p.lat, p.lng], { icon: _pinIcon(L, color, String(i + 1)) }).bindPopup(_popup(p, i), { maxWidth: 260 }).addTo(map); bounds.extend([p.lat, p.lng]); });
+    }
+  } else {
+    valid.forEach((p, i) => { const color = opts.colorByType ? _catColor(p.type) : colors[i % colors.length]; L.marker([p.lat, p.lng], { icon: _pinIcon(L, color, String(i + 1)) }).bindPopup(_popup(p, i), { maxWidth: 260 }).addTo(map); bounds.extend([p.lat, p.lng]); });
+  }
+  valid.length === 1 ? map.setView([valid[0].lat, valid[0].lng], opts.zoom || 15) : map.fitBounds(bounds, { padding: [40, 40] });
+  return { map, places: valid };
 }
 
 export async function renderRouteMap(waypoints,container,opts={}) {
@@ -245,7 +432,21 @@ function _updateLightbox() {
   if(p)p.style.display=_lbImgs.length>1?'':'none'; if(n)n.style.display=_lbImgs.length>1?'':'none';
 }
 function _closeLightbox() { if(!_lb)return; _lb.classList.remove('visible'); setTimeout(()=>{_lb?.remove();_lb=null;},200); document.removeEventListener('keydown',_lbKey); }
-function _dlImg(img) { const a=Object.assign(document.createElement('a'),{href:img.url,download:img.title||'image',target:'_blank'}); document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+async function _dlImg(img) {
+  try {
+    const r = await fetch(img.url, { mode: 'cors', credentials: 'omit' });
+    if (r.ok) {
+      const blob = await r.blob();
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: img.title || 'image' });
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } else throw new Error('fetch failed');
+  } catch {
+    // fallback: open in new tab
+    const a = Object.assign(document.createElement('a'), { href: img.url, download: img.title || 'image', target: '_blank' });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+}
 
 export function renderImageGrid(images, container, opts={}) {
   _injectImgCSS(); container.innerHTML=''; container.style.fontFamily='system-ui,sans-serif';
@@ -289,7 +490,7 @@ const _WDIR=['N','NE','E','SE','S','SW','W','NW'];
 const _windDir=deg=>_WDIR[Math.round(deg/45)%8]||'—';
 const _uvLbl=uv=>!uv?'—':uv<=2?`${uv} Low`:uv<=5?`${uv} Mod`:uv<=7?`${uv} High`:uv<=10?`${uv} V.High`:`${uv} Extreme`;
 const _fmtHour=iso=>new Date(iso).toLocaleTimeString([],{hour:'numeric',hour12:true});
-const _wmoIcon=c=>({0:'☀️',1:'🌤️',2:'⛅',3:'☁️',45:'🌫️',48:'🌫️',51:'🌦️',53:'🌦️',55:'🌧️',61:'🌧️',63:'🌧️',65:'⛈️',71:'🌨️',73:'❄️',75:'❄️',80:'🌦️',81:'🌧️',82:'⛈️',95:'⛈️',96:'⛈️',99:'🌩️'}[c]||'🌡️');
+const _wmoIcon = c => { const w = WMO[c]; return w ? w.icon : '🌡️'; };
 
 export function renderWeatherCard(data, container) {
   _injectWeatherCSS(); container.innerHTML='';
@@ -318,9 +519,62 @@ export function renderWeatherCard(data, container) {
   root.appendChild(body); container.appendChild(root);
 }
 
+export function cacheWeatherData(location, data) {
+  try {
+    localStorage.setItem('aether_last_weather', JSON.stringify({ location, data, timestamp: Date.now() }));
+  } catch {}
+}
+
+export function getCachedWeather(location) {
+  try {
+    const raw = localStorage.getItem('aether_last_weather');
+    if (!raw) return null;
+    const entry = JSON.parse(raw);
+    if (entry.location === location && Date.now() - entry.timestamp < 30 * 60 * 1000) return entry.data;
+    return null;
+  } catch { return null; }
+}
+
 function _renderWxLoading(container,location='') {
   container.innerHTML=`<div style="font-family:system-ui;border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.1)"><div style="height:220px;background:linear-gradient(145deg,#B0BEC5,#CFD8DC);display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:white"><div style="font-size:32px;animation:spin 1.5s linear infinite">🌐</div><div style="font-size:13px;opacity:.8">${location?`Loading weather for ${location}…`:'Fetching weather…'}</div></div><div style="height:80px;background:white;display:flex;align-items:center;justify-content:center;font-size:12px;color:#888">Contacting Open-Meteo…</div></div><style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §6.5  GEOLOCATION API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function getCurrentLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) reject(new Error('Geolocation not supported'));
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+      err => reject(new Error(`Geolocation error: ${err.message}`)),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §6.6  CUSTOM PROVIDERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export const customProviders = {
+  _registry: {},
+  register(id, { search, searchName }) {
+    this._registry[id] = { search, searchName };
+    try { localStorage.setItem('aether_custom_providers', JSON.stringify(Object.keys(this._registry))); } catch {}
+  },
+  unregister(id) { delete this._registry[id]; },
+  list() { return Object.keys(this._registry); },
+  get(id) { return this._registry[id] || null; },
+  _loadSaved() {
+    try {
+      const saved = localStorage.getItem('aether_custom_providers');
+      if (saved) JSON.parse(saved).forEach(id => { /* re-register on next use */ });
+    } catch {}
+  }
+};
+customProviders._loadSaved();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §7  MAP RESULTS RENDERER  (split: cards + map)
@@ -400,49 +654,137 @@ export function renderSettingsPanel(container) {
 // §10  SPEC EXTRACTOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function _skillUtils() {
+  try {
+    return (typeof globalThis !== 'undefined' && globalThis.AETHER_SkillUtils)
+      || (typeof window !== 'undefined' && window.AETHER_SkillUtils)
+      || null;
+  } catch { return null; }
+}
+
 export function extractSpec(text) {
-  if(!text) return null;
-  for(const s of [text.trim(),text.replace(/```(?:json)?\s*([\s\S]*?)```/g,'$1').trim()]) {
-    try{ const p=JSON.parse(s); if(p.action) return p; }catch{}
+  const su = _skillUtils();
+  if (su?.parseWithRepair) {
+    const r = su.parseWithRepair(text, { requireKey: 'action' });
+    if (r?.spec) return r.spec;
+  } else if (su?.softParseSpec) {
+    const p = su.softParseSpec(text, { requireKey: 'action' });
+    if (p) return p;
+  }
+  if (!text) return null;
+  for (const s of [text.trim(), text.replace(/```(?:json)?\s*([\s\S]*?)```/gi, '$1').trim()]) {
+    try {
+      const p = JSON.parse(s);
+      if (p && p.action) return p;
+    } catch {}
+  }
+  const m = String(text).match(/\{\s*"action"\s*:\s*"[^"]+"[\s\S]*\}/);
+  if (m) {
+    try {
+      const p = JSON.parse(m[0].replace(/,\s*}/g, '}'));
+      if (p.action) return p;
+    } catch {}
   }
   return null;
+}
+
+/** Async: soft → aggressive → model repair */
+export async function extractSpecAsync(text, opts = {}) {
+  const su = _skillUtils();
+  if (su?.parseWithRetry) {
+    const r = await su.parseWithRetry(text, {
+      requireKey: 'action',
+      skillHint: 'discovery',
+      allowModelRepair: opts.allowModelRepair !== false,
+      callModel: opts.callModel,
+    });
+    return r?.spec || null;
+  }
+  return extractSpec(text);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §11  MAIN EXECUTE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export async function execute(spec, container, opts={}) {
-  if(!spec?.action) throw new Error('Invalid spec: missing action');
-  switch(spec.action) {
-    case 'images': {
-      _renderImgLoading(container,spec.query);
-      const images=await imageSearch(spec.query,{limit:spec.limit||12});
-      renderImageGrid(images,container,{query:spec.query});
-      return {type:'images',count:images.length,images};
+export async function execute(spec, container, opts = {}) {
+  // Allow raw model text
+  if (typeof spec === 'string') {
+    const parsed = extractSpec(spec);
+    if (!parsed) throw new Error('Invalid discovery spec: could not parse JSON action');
+    spec = parsed;
+  }
+  if (!spec?.action) throw new Error('Invalid spec: missing action');
+
+  KeyStore.syncFromHost();
+  const su = _skillUtils();
+  const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+  const startedFlight = su?.kernelFlight?.('discovery', spec.action + ': ' + (spec.query || spec.location || ''));
+  su?.kernelLog?.('discovery.' + spec.action, (spec.query || spec.location || '').slice(0, 80), 'net');
+
+  try {
+    let result;
+    switch (spec.action) {
+      case 'images': {
+        _renderImgLoading(container, spec.query);
+        const images = await imageSearch(spec.query, { limit: spec.limit || 12 });
+        renderImageGrid(images, container, { query: spec.query });
+        result = { type: 'images', count: images.length, images };
+        break;
+      }
+      case 'search': {
+        const results = await webSearch(spec.query, { limit: spec.limit || 8, depth: spec.depth || 'basic' });
+        renderSearchResults(results, container, { query: spec.query });
+        result = { type: 'search', ...results };
+        break;
+      }
+      case 'news': {
+        const results = await newsSearch(spec.query, { limit: spec.limit || 8, freshness: spec.freshness });
+        renderSearchResults(results, container, { query: spec.query });
+        result = { type: 'news', ...results };
+        break;
+      }
+      case 'places': {
+        _renderMapLoading(container, spec.query);
+        const places = await placeSearch(spec.query, { limit: spec.limit || 8 });
+        await renderMapResults(places, container, { query: spec.query, colorByType: spec.colorByType !== false });
+        result = { type: 'places', count: places.length, places };
+        break;
+      }
+      case 'route': {
+        container.style.minHeight = '420px';
+        result = await renderRouteMap(spec.waypoints || [], container, { height: spec.height || 420, lineColor: spec.lineColor });
+        break;
+      }
+      case 'weather': {
+        _renderWxLoading(container, spec.location);
+        const data = await fetchWeather(spec.location, { units: spec.units || 'celsius' });
+        renderWeatherCard(data, container);
+        cacheWeatherData(spec.location, data);
+        if (data.location) fetchWeatherAlerts(data.location.lat, data.location.lng).then(alerts => {
+          if (alerts.length) {
+            const alertBar = document.createElement('div');
+            alertBar.style.cssText = 'padding:10px 16px;background:#FFF3CD;border-bottom:1px solid #FFC107;font-size:12px;font-family:system-ui;color:#856404';
+            alertBar.innerHTML = `⚠ ${alerts.length} weather alert${alerts.length > 1 ? 's' : ''}: ${alerts[0].headline}${alerts.length > 1 ? ` (+${alerts.length - 1} more)` : ''}`;
+            const root = container.querySelector('.aw-root');
+            if (root) root.prepend(alertBar);
+          }
+        });
+        result = { type: 'weather', ...data };
+        break;
+      }
+      default:
+        throw new Error(`Unknown action: "${spec.action}"`);
     }
-    case 'search': {
-      const results=await webSearch(spec.query,{limit:spec.limit||8,depth:spec.depth||'basic'});
-      renderSearchResults(results,container,{query:spec.query});
-      return {type:'search',...results};
-    }
-    case 'places': {
-      _renderMapLoading(container,spec.query);
-      const places=await placeSearch(spec.query,{limit:spec.limit||8});
-      await renderMapResults(places,container,{query:spec.query,colorByType:spec.colorByType!==false});
-      return {type:'places',count:places.length,places};
-    }
-    case 'route': {
-      container.style.minHeight='420px';
-      return renderRouteMap(spec.waypoints||[],container,{height:spec.height||420,lineColor:spec.lineColor});
-    }
-    case 'weather': {
-      _renderWxLoading(container,spec.location);
-      const data=await fetchWeather(spec.location,{units:spec.units||'celsius'});
-      renderWeatherCard(data,container);
-      return {type:'weather',...data};
-    }
-    default: throw new Error(`Unknown action: "${spec.action}"`);
+    const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+    su?.kernelLog?.('discovery.' + spec.action + '.ok', (result?.type || 'done') + ' · ' + ms + 'ms', 'net', { ok: true, ms });
+    if (startedFlight) su?.kernelEnd?.('landed');
+    return result;
+  } catch (e) {
+    const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+    su?.kernelLog?.('discovery.' + spec.action + '.ERR', e.message || String(e), 'net', { ok: false, ms });
+    if (startedFlight) su?.kernelEnd?.('aborted');
+    throw e;
   }
 }
 
@@ -450,20 +792,23 @@ export async function execute(spec, container, opts={}) {
 // §12  SYSTEM PROMPT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-export const SYSTEM_PROMPT=`You are the AETHER Discovery skill. Help users search, find images, discover places, and check weather.
+export const SYSTEM_PROMPT = `You are the AETHER Discovery skill. Help users search, find images, discover places, check weather, and find news.
 When intent matches, respond ONLY with raw JSON. No fences. No explanation.
 
 WEB SEARCH:   { "action":"search",  "query":"...", "limit":8 }
 IMAGE SEARCH: { "action":"images",  "query":"...", "limit":12 }
+NEWS SEARCH:  { "action":"news",    "query":"...", "limit":8, "freshness":"day" }
 PLACES / MAP: { "action":"places",  "query":"best restaurants Tokyo", "limit":8, "colorByType":true }
 ROUTE:        { "action":"route",   "waypoints":[{"name":"Eiffel Tower","address":"Paris"},{"name":"Louvre","address":"Paris"}] }
 WEATHER:      { "action":"weather", "location":"Tokyo, Japan", "units":"celsius" }
 
 units: "celsius" | "fahrenheit"
+freshness: "day" | "week" | "month" | "year"
 
 ROUTING GUIDE:
 "show me photos of X"     → images
 "search for X"            → search
+"news about X"            → news
 "find restaurants in X"   → places
 "directions from X to Y"  → route
 "weather in X"            → weather
@@ -475,17 +820,38 @@ Always pick ONE action. Output raw JSON only. For conversational questions respo
 // §13  SKILL DEFINITION
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const DiscoverySkill={
-  name:'discovery',version:'1.0.0',
-  description:'Web search, image search, place maps, and weather — Tavily, Serper, Brave, Open-Meteo',
-  category:'research',tier:'research',
-  providers:{search:['tavily','serper','brave'],weather:['open-meteo','openweathermap'],maps:['leaflet+osm']},
-  triggers:['show me images','find photos','image search','pictures of','search for','look up','find information','what is','who is','tell me about','latest news','find restaurants','find hotels','places near','show me on a map','map of','directions from','route from','how do i get to','things to do in','weather in',"what's the weather",'will it rain','temperature in','forecast for'],
-  systemPrompt:SYSTEM_PROMPT,
-  settings:{render:renderSettingsPanel,keys:KeyStore},
-  tools:{webSearch,imageSearch,placeSearch,fetchWeather,geocode},
-  renderers:{images:{render:renderImageGrid,loading:_renderImgLoading},map:{render:renderMapResults,loading:_renderMapLoading},weather:{render:renderWeatherCard,loading:_renderWxLoading},places:{renderMap:renderPlacesMap,renderRoute:renderRouteMap}},
-  execute,extractSpec,openLightbox,
+const DiscoverySkill = {
+  name: 'discovery', version: '1.3.0',
+  description: 'Web search, news, images, maps, weather — Tavily/Serper/Brave + free OSM/Open-Meteo. Soft-parse + model repair for truncated JSON.',
+  category: 'research', tier: 'research',
+  providers: {
+    search: ['tavily', 'serper', 'brave'],
+    news: ['brave', 'serper', 'tavily'],
+    weather: ['open-meteo', 'openweathermap', 'nws-alerts'],
+    maps: ['leaflet+osm', 'leaflet.markercluster'],
+  },
+  triggers: ['show me images', 'find photos', 'image search', 'pictures of', 'search for', 'look up', 'find information', 'what is', 'who is', 'tell me about', 'latest news', 'news about', 'headlines', 'find restaurants', 'find hotels', 'places near', 'show me on a map', 'map of', 'directions from', 'route from', 'how do i get to', 'things to do in', 'weather in', "what's the weather", 'will it rain', 'temperature in', 'forecast for'],
+  systemPrompt: SYSTEM_PROMPT,
+  skillMd: `# Discovery Skill v1.3
+
+## Actions
+search · images · news · places · route · weather
+
+## Providers
+- Search: Tavily → Serper → Brave
+- News: Brave → Serper → Tavily
+- Weather: Open-Meteo (free) → OpenWeatherMap
+- Maps: Leaflet + OSM (no key)
+
+## Integration
+- Keys sync from AETHER HOOKS
+- Soft-parse + aggressive repair + optional model repair (truncated streams)
+- Kernel flight logs on every execute
+`,
+  settings: { render: renderSettingsPanel, keys: KeyStore },
+  tools: { webSearch, imageSearch, newsSearch, placeSearch, fetchWeather, geocode, getCurrentLocation, fetchWeatherAlerts, customProviders, cache: { get: cache.get, set: cache.set, clear: cache.clear } },
+  renderers: { images: { render: renderImageGrid, loading: _renderImgLoading }, map: { render: renderMapResults, loading: _renderMapLoading }, weather: { render: renderWeatherCard, loading: _renderWxLoading }, places: { renderMap: renderPlacesMap, renderRoute: renderRouteMap } },
+  execute, extractSpec, extractSpecAsync, openLightbox, KeyStore,
 };
 
 export default DiscoverySkill;
