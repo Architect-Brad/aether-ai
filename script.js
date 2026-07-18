@@ -5874,15 +5874,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         const tool = TOOL_REGISTRY[key];
         if (!tool) {
             const avail = Object.keys(TOOL_REGISTRY).slice(0, 40).join(', ');
-            return RT
-                ? RT.formatResult(key || name, 'Unknown tool. Available: ' + avail, { ok: false, ms: 0 })
+            const out = RT
+                ? RT.formatResult(key || name, 'Unknown tool. Available: ' + avail, { ok: false, ms: 0, force: true })
                 : `Unknown tool "${name}". Available: ${avail}`;
+            try { if (RT && RT.recordHealth) RT.recordHealth(key || name, false, 0, 'unknown tool'); } catch (_) {}
+            return out;
         }
         // Tool pack gate (MCP-style packs)
         if (typeof AETHER_ToolPacks !== 'undefined' && AETHER_ToolPacks.isToolAllowed && !AETHER_ToolPacks.isToolAllowed(key)) {
             const msg = 'blocked — enable the tool pack that owns this tool (/packs).';
             try { if (SEC) SEC.audit('pack_block', key); } catch (_) {}
-            return RT ? RT.formatResult(key, msg, { ok: false, ms: 0 }) : `[${name}] ${msg}`;
+            try { if (RT && RT.recordHealth) RT.recordHealth(key, false, 0, msg); } catch (_) {}
+            return RT ? RT.formatResult(key, msg, { ok: false, ms: 0, force: true }) : `[${name}] ${msg}`;
         }
 
         // Skill Runtime tool policy (prefer / strict)
@@ -5891,11 +5894,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const skillGate = AETHER_SkillRuntime.checkToolAllowed(key, activeSkills);
                 if (skillGate && skillGate.ok === false) {
                     try { if (SEC) SEC.audit('skill_policy_block', key); } catch (_) {}
+                    try { if (RT && RT.recordHealth) RT.recordHealth(key, false, 0, skillGate.reason); } catch (_) {}
                     return RT
-                        ? RT.formatResult(key, skillGate.reason || 'blocked by skill policy', { ok: false, ms: 0 })
+                        ? RT.formatResult(key, skillGate.reason || 'blocked by skill policy', { ok: false, ms: 0, force: true })
                         : `[${name}] ${skillGate.reason || 'blocked by skill policy'}`;
                 }
             } catch (_) {}
+        }
+
+        // Schema validation + one-shot repair
+        var repaired = false;
+        var validation = null;
+        if (RT && RT.validateAndRepairArgs) {
+            validation = RT.validateAndRepairArgs(key, args);
+            repaired = !!validation.repaired;
+            if (!validation.ok) {
+                const msg = 'schema: ' + (validation.errors || []).join('; ');
+                try { if (RT.recordHealth) RT.recordHealth(key, false, 0, msg); } catch (_) {}
+                return RT.formatResult(key, msg, { ok: false, ms: 0, force: true, repaired: repaired });
+            }
+            // Prefer repaired object for object-style; keep string when un-repaired single primary
+            if (repaired || (args && typeof args === 'object' && !Array.isArray(args))) {
+                args = validation.args;
+            }
         }
 
         // Security preflight: paths, shell allowlist, SSRF, rate limit
@@ -5903,14 +5924,17 @@ document.addEventListener('DOMContentLoaded', async () => {
             const pf = SEC.preflightTool(key, args);
             if (!pf.ok) {
                 try { SEC.audit('block', key + ': ' + pf.error); } catch (_) {}
-                return RT ? RT.formatResult(key, 'security: ' + pf.error, { ok: false, ms: 0 }) : `[${name}] security: ${pf.error}`;
+                try { if (RT && RT.recordHealth) RT.recordHealth(key, false, 0, pf.error); } catch (_) {}
+                return RT ? RT.formatResult(key, 'security: ' + pf.error, { ok: false, ms: 0, force: true }) : `[${name}] security: ${pf.error}`;
             }
             if (pf.args !== undefined && (key === 'shell' || key === 'ws_shell')) args = pf.args;
         }
 
-        const norm = RT
-            ? RT.normalizeArgs(key, args)
-            : { callArgs: typeof args === 'string' ? [args] : Object.values(args || {}), preview: String(args || '').slice(0, 200), meta: { class: 'call', timeout: 45000 } };
+        const norm = validation && validation.callArgs
+            ? { callArgs: validation.callArgs, preview: validation.preview, meta: validation.meta }
+            : (RT
+                ? RT.normalizeArgs(key, args)
+                : { callArgs: typeof args === 'string' ? [args] : Object.values(args || {}), preview: String(args || '').slice(0, 200), meta: { class: 'call', timeout: 45000 } });
         let preview = norm.preview || '';
         if (SEC && SEC.redactSecrets) preview = SEC.redactSecrets(preview);
         const meta = norm.meta || {};
@@ -5925,7 +5949,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             const allowed = await requestToolPermission(key, String(preview).slice(0, 100));
             if (!allowed) {
                 const msg = 'denied — user declined permission.';
-                return RT ? RT.formatResult(key, msg, { ok: false, ms: 0 }) : `[${name}] ${msg}`;
+                try { if (RT && RT.recordHealth) RT.recordHealth(key, false, 0, msg); } catch (_) {}
+                return RT ? RT.formatResult(key, msg, { ok: false, ms: 0, force: true }) : `[${name}] ${msg}`;
             }
         }
 
@@ -5936,28 +5961,53 @@ document.addEventListener('DOMContentLoaded', async () => {
         else if (cls === 'exec') phaseHint = 'shell';
         if (state.codingMode) setCodeSessionStatus(phaseHint, key + '…');
         var card = state.codingMode ? pushCodeToolCard(key, 'running', preview) : null;
-        // Always show agent status bar for non-coding too
         try { agentStatus(cls === 'net' ? 'search' : 'generic', '⚙ ' + key + '…'); } catch (_) {}
 
         const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        var attempts = 1;
         try {
-            let resultPromise = tool.fn(...(norm.callArgs || []));
-            if (RT && RT.withTimeout) {
-                resultPromise = RT.withTimeout(resultPromise, meta.timeout || RT.DEFAULT_TIMEOUT, key);
+            const runOnce = function () {
+                let resultPromise = tool.fn(...(norm.callArgs || []));
+                if (RT && RT.withTimeout) {
+                    resultPromise = RT.withTimeout(resultPromise, meta.timeout || RT.DEFAULT_TIMEOUT, key);
+                }
+                return resultPromise;
+            };
+
+            let result;
+            // Auto-retry reads/net on timeout/empty/soft-fail (one retry)
+            if (RT && RT.withRetry && (cls === 'read' || meta.class === 'net' || meta.class === 'read')) {
+                const retried = await RT.withRetry(runOnce, {
+                    max: 1,
+                    label: key,
+                    shouldRetry: function (v, text, err, attempt) {
+                        return RT.shouldRetryRead(key, v, text, err, attempt);
+                    },
+                });
+                result = retried.value;
+                attempts = retried.attempts || 1;
+            } else {
+                result = await runOnce();
             }
-            const result = await resultPromise;
+
             const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
             const out = RT
-                ? RT.formatResult(key, result, { ms: ms, maxResult: meta.maxResult })
+                ? RT.formatResult(key, result, {
+                    ms: ms,
+                    maxResult: meta.maxResult,
+                    force: true,
+                    retries: Math.max(0, attempts - 1),
+                    repaired: repaired,
+                    treatEmptyAsFail: cls === 'read',
+                })
                 : String(result);
             const ok = RT ? !RT.isFailureString(out) : !/error|denied|ok=false/i.test(out);
             finishCodeToolCard(card, ok ? 'ok' : 'err', out);
             if (state.codingMode) setCodeSessionStatus(ok ? 'idle' : 'error', ok ? 'Plan → Patch → Verify' : key + ' failed');
             try { agentDone(); } catch (_) {}
-            // Kernel + history
             try {
                 if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
-                    AETHER_Kernel.log(key, preview.slice(0, 80), cls, { ok: ok, ms: ms });
+                    AETHER_Kernel.log(key, preview.slice(0, 80), cls, { ok: ok, ms: ms, retries: attempts - 1 });
                 }
             } catch (_) {}
             try {
@@ -5966,22 +6016,21 @@ document.addEventListener('DOMContentLoaded', async () => {
                     RT.pushHistory({ t: Date.now(), name: key, class: cls, ok: ok, ms: ms, preview: prev.slice(0, 120) });
                 }
             } catch (_) {}
+            try { if (RT && RT.recordHealth) RT.recordHealth(key, ok, ms, ok ? null : out.slice(0, 120)); } catch (_) {}
             try {
                 if (typeof AETHER_CodeMobile !== 'undefined' && AETHER_CodeMobile.haptic) {
                     AETHER_CodeMobile.haptic(ok ? 'light' : 'err');
                 }
             } catch (_) {}
-            // Redact secrets in tool output before model/history sees them
-            if (SEC && SEC.redactSecrets) {
-                return SEC.redactSecrets(out);
-            }
+            if (SEC && SEC.redactSecrets) return SEC.redactSecrets(out);
             return out;
         } catch (e) {
             const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
             let errMsg = e && e.message ? e.message : String(e);
             if (SEC && SEC.redactSecrets) errMsg = SEC.redactSecrets(errMsg);
+            const retries = Math.max(0, (e && e.attempts ? e.attempts : attempts) - 1);
             const out = RT
-                ? RT.formatResult(key, 'error: ' + errMsg, { ok: false, ms: ms })
+                ? RT.formatResult(key, 'error: ' + errMsg, { ok: false, ms: ms, force: true, retries: retries, repaired: repaired })
                 : `[${name}] error: ${errMsg}`;
             finishCodeToolCard(card, 'err', out);
             if (state.codingMode) setCodeSessionStatus('error', errMsg.slice(0, 60));
@@ -5996,6 +6045,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     RT.pushHistory({ t: Date.now(), name: key, class: cls, ok: false, ms: ms, preview: errMsg.slice(0, 120) });
                 }
             } catch (_) {}
+            try { if (RT && RT.recordHealth) RT.recordHealth(key, false, ms, errMsg); } catch (_) {}
             return out;
         }
     }
@@ -6051,15 +6101,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function parseAndExecuteTools(text) {
+        // Text-protocol fallback when native tool_calls not present.
         // <web_search> / <search> / <visit_website> handled in streaming path — skip here.
         let pending = [];
         if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.parseToolCallsFromText) {
             pending = AETHER_ToolRuntime.parseToolCallsFromText(text).map((c) => ({
                 name: c.name,
                 args: c.args,
+                source: 'text',
             }));
         } else {
-            // Fallback legacy parser
             const multiRe = /\[\[(fs_write|fs_patch|search_replace|write_file):\s*([\s\S]*?)\]\]/gi;
             let m;
             while ((m = multiRe.exec(text)) !== null) pending.push({ name: m[1], args: m[2].trim() });
@@ -6072,7 +6123,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         return runToolCallsConcurrent(pending);
     }
 
-    // Returns OpenAI-format tools. buildAnthropicTools() returns Anthropic format.
+    // Returns OpenAI-format tools. Prefer native tool_calls; text [[ ]] is fallback only.
     function buildToolsDefinition() {
         const t = [];
         const DEFS = [
@@ -6111,12 +6162,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         ].filter(Boolean);
         DEFS.forEach(d => t.push({type:'function',function:d}));
 
-        // Merge Tool Runtime schemas for CODE / always-on util tools (avoid dumping entire registry)
+        // Prefer broad native tool surface (coding + agent). Text [[tool:]] remains fallback parse.
         try {
             if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.buildOpenAITools) {
-                const include = state.codingMode
-                    ? ['fs_read','fs_write','fs_patch','search_replace','fs_list','fs_stat','fs_exists','fs_mkdir','fs_rename','fs_copy','fs_delete','shell','calculate','read_file','glob','grep_files']
-                    : ['calculate','read_file','glob','grep_files'];
+                var include;
+                if (state.codingMode) {
+                    include = ['fs_read','fs_write','fs_patch','search_replace','fs_list','fs_stat','fs_exists','fs_mkdir','fs_rename','fs_copy','fs_delete','shell','calculate','read_file','glob','grep_files','web_search'];
+                } else if (state.beastMode || state.agentMode === 'auto' || state.deepResearch) {
+                    include = ['web_search','scrape','calculate','read_file','glob','grep_files','fs_read','fs_list','fs_stat','get_weather'];
+                } else {
+                    include = ['calculate','web_search','read_file','glob','grep_files','fs_list','fs_read'];
+                }
+                // Always allow tools that exist in registry from include list
                 const extras = AETHER_ToolRuntime.buildOpenAITools(TOOL_REGISTRY, { include: include });
                 const have = new Set(t.map(x => x.function.name));
                 extras.forEach(function (ex) {
@@ -6127,7 +6184,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 });
             }
         } catch (_) {}
-        return t;
+        // Cap for provider limits
+        return t.slice(0, 24);
     }
 
     // Anthropic tool schema format (input_schema instead of parameters)
@@ -6140,15 +6198,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function dispatchToolCalls(toolCalls) {
-        const list = (toolCalls || []).map((tc) => {
-            let args = {};
-            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-            return { name: tc.function?.name, args, id: tc.id };
-        });
+        // Prefer runtime native parser (OpenAI + Anthropic shapes)
+        var list;
+        if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.parseNativeToolCalls) {
+            list = AETHER_ToolRuntime.parseNativeToolCalls(toolCalls);
+        } else {
+            list = (toolCalls || []).map((tc) => {
+                let args = {};
+                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                return { name: tc.function?.name, args, id: tc.id, source: 'openai' };
+            });
+        }
+        list = (list || []).filter(function (c) { return c && c.name; });
         if (!list.length) return [];
-        agentStatus('generic', '⚙ tools ×' + list.length + '…');
+        agentStatus('generic', '⚙ native tools ×' + list.length + '…');
         const ran = await runToolCallsConcurrent(list);
-        // Map back tool_call_id
         const out = ran.map((r, i) => ({
             tool_call_id: list[i] && list[i].id,
             role: 'tool',
@@ -6157,6 +6221,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         }));
         agentDone();
         return out;
+    }
+
+    async function collectAndExecuteTools(opts) {
+        opts = opts || {};
+        var collected;
+        if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.collectToolCalls) {
+            collected = AETHER_ToolRuntime.collectToolCalls({
+                toolCalls: opts.toolCalls || opts.native || null,
+                text: opts.text || '',
+            });
+        } else {
+            collected = { calls: [], source: 'text' };
+            if (opts.toolCalls && opts.toolCalls.length) {
+                return dispatchToolCalls(opts.toolCalls);
+            }
+        }
+        if (collected.source === 'native' && collected.calls.length) {
+            agentStatus('generic', '⚙ native ×' + collected.calls.length);
+            const ran = await runToolCallsConcurrent(collected.calls);
+            agentDone();
+            return { source: 'native', results: ran };
+        }
+        // Text fallback
+        const textResults = await parseAndExecuteTools(opts.text || '');
+        return { source: 'text', results: textResults };
     }
 
     // ─── WEB SCRAPING ────────────────────────────────────────
@@ -11307,7 +11396,8 @@ ${tbl}
                 + '- For shell commands, use: [[shell: ls -la]] or [[shell: cat filename]]\n'
                 + '- Prefer structured results: ok=true/false, path=, diff=+N/-M\n'
                 + '- Tool runtime returns envelopes: tool=name ok=true|false ms=N class=read|write|exec|net\n'
-                + '- Prefer native tool_calls JSON when available; else [[tool: arg]] (multi-line OK for fs_patch/fs_write)\n\n'
+                + '- Prefer **native tool_calls / function calling** when available. Text [[tool: arg]] is fallback only (multi-line OK for fs_patch/fs_write).\n'
+                + '- Tool results arrive as structured envelopes: ok=… summary:… and a json:{…} trailer — read summary first, then body.\n\n'
                 + '## SURGICAL EDITS (PREFERRED)\n'
                 + '- NEVER rewrite a whole file if you are changing <40% of it — use fs_patch\n'
                 + '- Always fs_read (or shell cat) BEFORE patching so old_string matches exactly\n'
@@ -14690,16 +14780,28 @@ ${result}`));
         // Declare conv HERE — before any block that references it, to avoid TDZ crash
         const conv = state.conversations[convId];
 
-        // ── Execute [[bracket]] tool calls ([[web_search:]], [[get_weather:]], etc.) ──
-        // Only handles bracket syntax. XML patterns handled by xmlToolRe below.
+        // ── Execute tools: prefer native tool_calls, fallback to [[bracket]] text ──
         try {
-            const bracketResults = await parseAndExecuteTools(fullContent);
+            var nativeFromStream = (typeof responseJson !== 'undefined' && responseJson?.choices?.[0]?.message?.tool_calls)
+                ? responseJson.choices[0].message.tool_calls
+                : null;
+            var collected = typeof collectAndExecuteTools === 'function'
+                ? await collectAndExecuteTools({ toolCalls: nativeFromStream, text: fullContent })
+                : { source: 'text', results: await parseAndExecuteTools(fullContent) };
+            const bracketResults = collected.results || [];
             if (bracketResults.length > 0 && convId === state.currentConversationId) {
                 const searchNames = ['web_search', 'scrape', 'crawl'];
-                const wsNames    = ['read_file', 'write_file'];
+                const wsNames    = ['read_file', 'write_file', 'fs_read', 'fs_write'];
                 const searchBR   = bracketResults.filter(r => searchNames.includes(r.name));
                 const wsBR       = bracketResults.filter(r => wsNames.includes(r.name));
                 const otherBR    = bracketResults.filter(r => !searchNames.includes(r.name) && !wsNames.includes(r.name));
+
+                if (collected.source === 'native') {
+                    const badge = document.createElement('div');
+                    badge.className = 'tool-source-badge';
+                    badge.textContent = '⚙ native tool_calls';
+                    display.appendChild(badge);
+                }
 
                 for (const { name, result } of searchBR) {
                     const qMatch = fullContent.match(/\[\[web_search:\s*([^\]]+)\]\]/i);
@@ -14708,7 +14810,7 @@ ${result}`));
                 for (const { name, result } of wsBR) {
                     const wsEl = document.createElement('div');
                     wsEl.className = 'aether-msg ws-file-inject';
-                    const icon = name === 'write_file' ? '\u270f\ufe0f Written' : '\ud83d\udcc2 File';
+                    const icon = /write|patch/i.test(name) ? '\u270f\ufe0f Written' : '\ud83d\udcc2 File';
                     wsEl.appendChild(parseMarkdown('**' + icon + ':**\n\n' + String(result).slice(0, 2000)));
                     display.appendChild(wsEl);
                 }
@@ -14716,11 +14818,10 @@ ${result}`));
                     display.appendChild(renderToolResultCard(name, result));
                 }
                 const bracketContext = bracketResults.map(r => '[' + r.name + ' result]\n' + String(r.result)).join('\n\n');
-                // Mark as 'system' so it's used as context but never re-rendered as a user bubble on reload
-                if (conv) conv.messages.push({ role: 'system', content: '[Tool results]\n' + bracketContext });
+                if (conv) conv.messages.push({ role: 'system', content: '[Tool results · ' + (collected.source || 'text') + ']\n' + bracketContext });
                 smoothScrollToBottom();
             }
-        } catch(e) { /* bracket tool execution must never crash the stream */ }
+        } catch(e) { /* tool execution must never crash the stream */ }
 
         // Strip [[bracket]] tags, XML tool tags, function call tags, and aether control tags
         let cleanContent = fullContent
@@ -17556,9 +17657,28 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                 'Flags: `blockPrivateHttp`, `allowPuterTerminal`, `confirmAllWrites` via `AETHER_Security.setFlag(name, bool)`'
             );
         } },
-        { id:'tools',     label:'/tools',       desc:'List tools + recent tool call history',         group:'System', action: (arg) => {
+        { id:'tools',     label:'/tools [health|test]', desc:'Tools list, health dashboard, or golden suite', group:'System', action: (arg) => {
+            const a = (arg || '').trim().toLowerCase();
+            if (a === 'health' || a === 'stats' || a === 'status') {
+                if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.healthMarkdown) {
+                    addSystemMessage(AETHER_ToolRuntime.healthMarkdown(TOOL_REGISTRY, typeof hooksConfig !== 'undefined' ? hooksConfig : {}));
+                } else addSystemMessage('Tool health offline');
+                return;
+            }
+            if (a === 'test' || a === 'golden') {
+                if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.runGoldenSuite) {
+                    const r = AETHER_ToolRuntime.runGoldenSuite(TOOL_REGISTRY);
+                    addSystemMessage(
+                        '**Tool golden suite** — ' + (r.ok ? '✓ PASS' : '✗ FAIL') + ' · ' + r.passed + '/' + r.total + '\n\n' +
+                        r.results.map(function (x) {
+                            return (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : '');
+                        }).join('\n')
+                    );
+                } else addSystemMessage('Tool golden suite offline');
+                return;
+            }
             const keys = Object.keys(TOOL_REGISTRY);
-            let md = '**Tools** — ' + keys.length + ' registered\n\n';
+            let md = '**Tools** — ' + keys.length + ' registered · prefer **native tool_calls**\n\n';
             if (typeof AETHER_ToolRuntime !== 'undefined') {
                 const cat = AETHER_ToolRuntime.listCatalog();
                 const by = {};
@@ -17573,14 +17693,27 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                         md += '- ' + (h.ok ? '✓' : '✗') + ' `' + h.name + '` ' + (h.ms != null ? h.ms + 'ms' : '') + ' — ' + (h.preview || '').slice(0, 60) + '\n';
                     });
                 }
+                md += '\n`/tools health` · `/tools test` · `/tooltest`';
             } else {
                 md += keys.map(function (k) { return '`' + k + '`'; }).join(' · ');
             }
-            if (arg && arg.trim()) {
-                const q = arg.trim().toLowerCase();
-                md += '\n\n_Filter:_ `' + q + '`\n' + keys.filter(function (k) { return k.includes(q); }).map(function (k) { return '- `' + k + '` — ' + (TOOL_REGISTRY[k].desc || ''); }).join('\n');
+            if (a && a !== 'health' && a !== 'test') {
+                md += '\n\n_Filter:_ `' + a + '`\n' + keys.filter(function (k) { return k.includes(a); }).map(function (k) { return '- `' + k + '` — ' + (TOOL_REGISTRY[k].desc || ''); }).join('\n');
             }
             addSystemMessage(md);
+        } },
+        { id:'tooltest',  label:'/tooltest', desc:'Run tool runtime golden suite', group:'System', action: () => {
+            if (typeof AETHER_ToolRuntime === 'undefined' || !AETHER_ToolRuntime.runGoldenSuite) {
+                addSystemMessage('Tool runtime offline');
+                return;
+            }
+            const r = AETHER_ToolRuntime.runGoldenSuite(TOOL_REGISTRY);
+            addSystemMessage(
+                '**Tool Runtime golden** — ' + (r.ok ? '✓ PASS' : '✗ FAIL') + ' · ' + r.passed + '/' + r.total + '\n\n' +
+                r.results.map(function (x) {
+                    return (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : '');
+                }).join('\n')
+            );
         } },
         { id:'reset',     label:'/reset',       desc:'Reset all settings to defaults',                 group:'System',  action: () => { if(confirm('Reset all settings? Conversations are kept.')){ localStorage.clear(); location.reload(); } } },
     ];
@@ -17681,7 +17814,19 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.34', date: 'July 2026', tag: 'latest',
+            version: 'v5.35', date: 'July 2026', tag: 'latest',
+            headline: 'Tool Runtime v2 — native tool_calls, structured results, retry, health',
+            notes: [
+                { type:'new',  text:'NATIVE FIRST — prefer OpenAI/Anthropic tool_calls; [[bracket]] is fallback' },
+                { type:'new',  text:'STRUCTURED ENVELOPES — ok/ms/summary + json:aether-tool-v2 trailer' },
+                { type:'new',  text:'SCHEMA REPAIR — one-shot validateAndRepairArgs (aliases path/file, old/new)' },
+                { type:'new',  text:'AUTO-RETRY — one retry on read/net timeout, empty, or soft-fail' },
+                { type:'new',  text:'HEALTH — per-tool ok rate & latency; /tools health · /tooltest golden' },
+                { type:'new',  text:'BROADER native tool surface in coding/agent/DEEP modes' },
+            ],
+        },
+        {
+            version: 'v5.34', date: 'July 2026', tag: '',
             headline: 'Markdown Engine — GFM pipeline, sanitize, stream fences, code chrome',
             notes: [
                 { type:'new',  text:'AETHER_Markdown v1 — modular core/aether-markdown.js engine' },

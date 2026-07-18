@@ -7,8 +7,8 @@
  */
 (function (g) {
   'use strict';
-  var VERSION = '5.34';
-  var CODENAME = 'Markdown Engine';
+  var VERSION = '5.35';
+  var CODENAME = 'Tool Runtime v2';
   var BUILD = '2026.07.18';
 
   g.AETHER_VERSION = VERSION;

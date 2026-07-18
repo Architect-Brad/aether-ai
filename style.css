@@ -6719,6 +6719,14 @@ td.dcol { font-family: monospace; font-size: .67rem; color: #778899; padding: 2p
     border-color: rgba(127,119,221,0.4); color: #b0aaf0;
 }
 
+/* Tool Runtime v2 badges */
+.tool-source-badge {
+    display: inline-block; font-size: .58rem; font-family: var(--font-mono);
+    padding: 2px 8px; margin: 4px 0 8px;
+    border-radius: 6px; color: #3dba90;
+    background: rgba(29,158,117,0.12); border: 1px solid rgba(29,158,117,0.3);
+}
+
 /* ══════════════════════════════════════════════════════════ */
 /* AETHER MARKDOWN ENGINE v1                                 */
 /* ══════════════════════════════════════════════════════════ */
