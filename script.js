@@ -18758,10 +18758,10 @@ NODE COLORS: blue | purple | teal | amber | coral | pink | green | red | gray | 
 NODE SHAPES (flow only): add "shape":"diamond" or "shape":"circle" to any node
 
 RULES:
-- Prefer fenced blocks: triple-backtick viz or aether-viz with JSON inside (most reliable)
-- Raw JSON with a "type" field also works; Mermaid uses triple-backtick mermaid fence
+- Prefer fenced blocks: triple-backtick + viz or aether-viz language tag with JSON inside (most reliable)
+- Raw JSON with a "type" field also works; Mermaid uses triple-backtick + mermaid fence
 - After specs you can add markdown analysis
-- Multiple ```viz blocks in one response all render independently
+- Multiple fenced viz blocks in one response all render independently
 - Choose the right type: table for comparisons, radar for multi-axis, gantt for planning, heatmap for density`,
             tools: [],
             workflows: {
