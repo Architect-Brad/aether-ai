@@ -17923,7 +17923,18 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.36.1', date: 'July 2026', tag: 'latest',
+            version: 'v5.37', date: 'July 2026', tag: 'latest',
+            headline: 'Composer Float — snap chat input raised ↔ docked',
+            notes: [
+                { type:'new',  text:'FLOATING INPUT — raise the composer into the Kernel height band (thumb-friendly)' },
+                { type:'new',  text:'SNAP — drag handle up/down or tap ⬆ float / ⬇ dock; preference persists' },
+                { type:'new',  text:'KEYBOARD — visualViewport tracks soft keyboard; raised hugs the keyboard' },
+                { type:'new',  text:'DOCK — snaps to bottom and scrolls chat/browser down with it' },
+                { type:'fix',  text:'Kernel panel lifts above the floating composer so they do not overlap' },
+            ],
+        },
+        {
+            version: 'v5.36.1', date: 'July 2026', tag: '',
             headline: 'Hotfix — onboard freeze / RAM spike on preset (Builder·Ops)',
             notes: [
                 { type:'fix',  text:'OCR — stop eager PaddleOCR/ONNX init at boot (was multi‑MB model download during first-run)' },
