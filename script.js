@@ -1481,6 +1481,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!FS_SUPPORTED) { showNotification('File System Access API not supported. Use Chrome 86+ or Edge 86+.', 'warn'); return; }
         try {
             codingFolderHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+            try { window.codingFolderHandle = codingFolderHandle; } catch (_) {}
             registerFSTools();
             updateCodingFolderUI();
             saveFolderName(codingFolderHandle.name);
@@ -11574,7 +11575,11 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 }
             });
             if (skillsForPrompt.some(function(s){ return s.visualizer; })) {
-                prompt += '\n\n## VISUALIZER\nYou can output AETHER spec JSON for charts/diagrams. The renderer will detect and display them automatically.\nChart types: bar | line | area | bar-horizontal | stacked-bar | stacked-line | donut | pie | scatter | bubble | radar\nDiagram types: flow | struct | table | gantt | heatmap | timeline | svg | mermaid\nFlow layout: add "layout":"LR" for left-right, "layout":"RADIAL" for radial, default is top-bottom.\n';
+                prompt += '\n\n## VISUALIZER (aether-viz-v1)\n' +
+                    (typeof AetherVisualizer !== 'undefined' && AetherVisualizer.typeListMarkdown
+                        ? AetherVisualizer.typeListMarkdown()
+                        : 'Charts: bar · line · area · donut · radar · scatter · bubble · stacked-bar\nDiagrams: flow · struct · table · gantt · heatmap · timeline · svg · mermaid') +
+                    '\nPrefer fenced blocks: ```viz or ```aether-viz with JSON. Multiple specs per reply all render. Flow layout: TB | LR | RADIAL.\n';
             }
             // Skill Runtime: tool policy + active playbook checklist
             if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.buildRuntimePromptAddon) {
@@ -11604,10 +11609,13 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             prompt += '**RAG Knowledge Base**: Empty. User can attach files via the + menu to build it.\n\n';
         }
 
-        // AetherVisualizer
-        prompt += '**AETHER Visualizer**: You can render live charts and diagrams inline by outputting a JSON spec directly in your response. '
-            + 'Supported: bar | line | donut | scatter | flow | struct | mermaid. '
-            + 'Output raw JSON (no code fences) and it renders automatically. Example: {"type":"bar","labels":["A","B"],"datasets":[{"label":"","data":[10,20]}]}\n\n';
+        // AetherVisualizer v2
+        prompt += '**AETHER Visualizer v2** (`aether-viz-v1`): render live charts/diagrams inline.\n'
+            + (typeof AetherVisualizer !== 'undefined' && AetherVisualizer.typeListMarkdown
+                ? AetherVisualizer.typeListMarkdown() + '\n'
+                : 'bar · line · donut · flow · struct · table · gantt · mermaid\n')
+            + 'Prefer ```viz fences (or raw JSON with "type"). Multiple specs in one reply all render. '
+            + 'Example: ```viz\\n{"type":"bar","labels":["A","B"],"datasets":[{"data":[10,20]}]}\\n```\n\n';
 
         // Skills available
         const allSkillNames = Object.values(AETHER_SKILLS).map(s => s.label).join(', ');
@@ -12292,579 +12300,9 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     // lists, blockquotes, links, images, checkboxes, and more.
     // Does NOT use a library. Yes, we wrote our own parser.
     // ═══════════════════════════════════════════════════════════
-    // AETHER VISUALIZER — Inline module (v0.1.0)
-    // Browser-only visualization engine. Inlined from aether-visualizer.js
-    // so it works in the monolithic single-file architecture without ESM.
-    //
-    // Renders: bar, line, area, horizontal-bar, stacked-bar, stacked-line,
-    //          donut, pie, scatter, bubble, radar, gantt, heatmap, timeline,
-    //          table, flow (TB/LR/radial layouts), struct, raw SVG, Mermaid.
-    //
-    // Usage: AetherVisualizer.autoDetect(llmText, container)
-    // Returns true if a spec or mermaid block was rendered, false for plain text.
-    // ═══════════════════════════════════════════════════════════
-    (function() {
-        const VIZ_COLORS = {
-            blue:   { fill:'#0d1e30', stroke:'#378ADD', text:'#7ab8f0' },
-            purple: { fill:'#140e2a', stroke:'#7F77DD', text:'#b0aaee' },
-            teal:   { fill:'#091e18', stroke:'#1D9E75', text:'#5ecfaa' },
-            amber:  { fill:'#1e1400', stroke:'#BA7517', text:'#e0a040' },
-            coral:  { fill:'#200a00', stroke:'#D85A30', text:'#f0906a' },
-            pink:   { fill:'#200010', stroke:'#D4537E', text:'#f08aaa' },
-            green:  { fill:'#0a1a00', stroke:'#639922', text:'#90cc44' },
-            red:    { fill:'#200000', stroke:'#E24B4A', text:'#f08080' },
-            gray:   { fill:'#0d1520', stroke:'#334455', text:'#8aaabb' },
-            cyan:   { fill:'#001e22', stroke:'#00c8d8', text:'#44e0ee' },
-        };
-        const VIZ_PALETTE = ['#378ADD','#7F77DD','#1D9E75','#BA7517','#D85A30','#D4537E','#639922','#E24B4A','#00c8d8','#f0c040'];
-        const ARROW = `<defs><marker id="av-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#556677" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker><marker id="av-arrow-lr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M2 1L8 5L2 9" fill="none" stroke="#556677" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>`;
-        const SAFE_TAGS = new Set(['svg','g','rect','circle','ellipse','line','path','polyline','polygon','text','tspan','defs','marker','linearGradient','radialGradient','stop','clipPath','title','desc','foreignObject']);
-        const SAFE_ATTRS = new Set(['viewBox','width','height','xmlns','x','y','x1','y1','x2','y2','cx','cy','r','rx','ry','d','points','fill','stroke','stroke-width','stroke-dasharray','stroke-linecap','stroke-linejoin','stroke-opacity','fill-opacity','opacity','transform','text-anchor','dominant-baseline','font-size','font-weight','font-family','marker-end','marker-start','id','style','offset','stop-color','stop-opacity','gradientUnits','markerWidth','markerHeight','refX','refY','orient','preserveAspectRatio']);
+    // AETHER Visualizer lives in core/aether-visualizer.js (v2)
+    // Loaded before script.js — see window.AetherVisualizer / AETHER_Visualizer
 
-        function vc(name) { return VIZ_COLORS[name] || VIZ_COLORS.gray; }
-        function vcPalette(i) { return VIZ_PALETTE[i % VIZ_PALETTE.length]; }
-        function clamp(v,mn,mx) { return Math.max(mn,Math.min(mx,v)); }
-        function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-        function baseContainer(c) {
-            c.innerHTML = '';
-            c.style.cssText = 'font-family:system-ui,sans-serif;background:transparent;width:100%;box-sizing:border-box;';
-            return c;
-        }
-
-        function vizErr(c, msg, rawSpec) {
-            c.innerHTML = `<div style="padding:12px 14px;color:#e08080;font-size:.72rem;border:1px solid rgba(200,80,80,0.25);border-radius:8px;background:rgba(200,80,80,0.05);">
-                <strong>⚠ Visualizer error:</strong> ${escHtml(msg)}
-                ${rawSpec ? `<details style="margin-top:6px"><summary style="cursor:pointer;color:#8a6a6a">Show spec</summary><pre style="font-size:.65rem;color:#6a5a5a;margin:6px 0 0;white-space:pre-wrap">${escHtml(typeof rawSpec==='string'?rawSpec:JSON.stringify(rawSpec,null,2))}</pre></details>` : ''}
-            </div>`;
-        }
-
-        function sanitizeSVG(svgStr) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(svgStr, 'image/svg+xml');
-            if (doc.querySelector('parseerror,parsererror')) throw new Error('Invalid SVG');
-            function clean(node) {
-                if (node.nodeType === 1) {
-                    const tag = node.tagName.toLowerCase().replace(/^svg:/,'');
-                    if (!SAFE_TAGS.has(tag)) { node.remove(); return; }
-                    for (const a of [...node.attributes]) {
-                        if (/^on|href|xlink|src|action|formaction|data:/i.test(a.name) || !SAFE_ATTRS.has(a.name)) node.removeAttribute(a.name);
-                    }
-                    // Inline style — strip url() and javascript:
-                    const style = node.getAttribute('style');
-                    if (style) node.setAttribute('style', style.replace(/url\s*\(|javascript:/gi,''));
-                    for (const ch of [...node.childNodes]) clean(ch);
-                } else if (node.nodeType !== 3) { node.remove(); }
-            }
-            clean(doc.documentElement);
-            return new XMLSerializer().serializeToString(doc.documentElement);
-        }
-
-        // ── Schema normalisation — accepts multiple input formats ─
-        function normalizeSpec(raw) {
-            if (!raw || typeof raw !== 'object') return null;
-            // Already correct format
-            if (raw.type && raw.datasets) return raw;
-            // Chart.js native: {type, data: {labels, datasets}, options}
-            if (raw.type && raw.data?.datasets) {
-                return { type: raw.type, labels: raw.data.labels || [], datasets: raw.data.datasets, options: raw.options?.plugins?.title ? { title: raw.options.plugins.title.text } : {} };
-            }
-            // Flat format: {type, data: [1,2,3], labels: [], label: 'Series'}
-            if (raw.type && Array.isArray(raw.data) && !raw.data[0]?.data) {
-                return { type: raw.type, labels: raw.labels || [], datasets: [{ label: raw.label || '', data: raw.data, color: raw.color }], options: raw.options || {} };
-            }
-            // Table flat: {type:'table', headers:[], rows:[[]]}
-            if (raw.type === 'table' && raw.headers) return raw;
-            // Gantt flat: {type:'gantt', tasks:[]}
-            if (raw.type === 'gantt' && raw.tasks) return raw;
-            // Heatmap: {type:'heatmap', data:[[]], xLabels:[], yLabels:[]}
-            if (raw.type === 'heatmap' && raw.data) return raw;
-            // Timeline: {type:'timeline', events:[]}
-            if (raw.type === 'timeline' && raw.events) return raw;
-            return null;
-        }
-
-        function extractSpec(text) {
-            if (!text || typeof text !== 'string') return null;
-            // Try raw JSON
-            try { const t=text.trim(); if(t.startsWith('{')){ const p=JSON.parse(t); const n=normalizeSpec(p); if(n) return n; } } catch(_){}
-            // Try inside ```json fences
-            const fenceMatch = text.match(/```(?:json|chart|viz|visuali[sz]er)?\s*([\s\S]*?)```/);
-            if (fenceMatch) { try { const p=JSON.parse(fenceMatch[1].trim()); const n=normalizeSpec(p); if(n) return n; } catch(_){} }
-            // Try any JSON object in text
-            const anyJson = text.match(/\{[\s\S]*"type"[\s\S]*\}/);
-            if (anyJson) { try { const p=JSON.parse(anyJson[0]); const n=normalizeSpec(p); if(n) return n; } catch(_){} }
-            return null;
-        }
-
-        function extractMermaid(text) {
-            const m = text.match(/```mermaid\s*([\s\S]*?)```/);
-            return m ? m[1].trim() : null;
-        }
-
-        // ── Chart.js ─────────────────────────────────────────────
-        async function ensureChartJS() {
-            if (window.Chart) return;
-            if (window.AETHER_Lazy) {
-                const ok = await AETHER_Lazy.ensure('chart');
-                if (ok && window.Chart) return;
-            }
-            await new Promise((resolve,reject)=>{
-                const s=document.createElement('script');
-                s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
-                s.onload=resolve; s.onerror=()=>reject(new Error('Chart.js load failed'));
-                document.head.appendChild(s);
-            });
-        }
-
-        const _chartCache = new WeakMap();
-
-        function addExportBtn(container, getBlob, filename) {
-            const btn = document.createElement('button');
-            btn.style.cssText = 'position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.5);border:1px solid #334455;color:#8aaabb;font-size:.62rem;font-family:monospace;padding:3px 8px;border-radius:4px;cursor:pointer;opacity:0;transition:opacity .15s;z-index:2';
-            btn.textContent = '↓';
-            btn.title = 'Export';
-            container.style.position = 'relative';
-            container.addEventListener('mouseenter', () => btn.style.opacity = '1');
-            container.addEventListener('mouseleave', () => btn.style.opacity = '0');
-            btn.onclick = async () => {
-                const blob = await getBlob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
-                setTimeout(() => URL.revokeObjectURL(url), 2000);
-            };
-            container.appendChild(btn);
-        }
-
-        async function renderChart(spec, container, type) {
-            await ensureChartJS();
-            const canvas = document.createElement('canvas'); canvas.style.maxHeight = '320px';
-            container.appendChild(canvas);
-            const prev = _chartCache.get(container); if (prev) prev.destroy();
-
-            const isDonut  = type === 'donut' || type === 'pie';
-            const isScatter = type === 'scatter';
-            const isBubble  = type === 'bubble';
-            const isRadar   = type === 'radar';
-            const isHBar    = type === 'bar-horizontal';
-            const isStacked = type === 'stacked-bar' || type === 'stacked-line';
-            const baseType  = isDonut ? 'doughnut' : isHBar ? 'bar' : isStacked ? (type==='stacked-line'?'line':'bar') : type;
-            const isArea    = type === 'area';
-
-            const datasets = spec.datasets.map((d,i)=>({
-                label: d.label || '',
-                data: d.data,
-                backgroundColor: isDonut ? (d.colors || VIZ_PALETTE.slice(0, (d.data||[]).length)) : isArea ? (d.color||vcPalette(i))+'44' : (d.color||vcPalette(i))+'cc',
-                borderColor: isDonut ? (d.colors || VIZ_PALETTE.slice(0, (d.data||[]).length)) : (d.color||vcPalette(i)),
-                borderWidth: isDonut ? 2 : 2,
-                borderRadius: (isDonut||isScatter||isBubble||isRadar||isArea) ? 0 : 4,
-                tension: 0.4,
-                fill: isArea ? 'origin' : (d.fill || false),
-                pointRadius: (isScatter||isBubble) ? 5 : 3,
-                pointHoverRadius: 6,
-            }));
-
-            const inst = new Chart(canvas, {
-                type: isArea ? 'line' : baseType,
-                data: { labels: spec.labels || [], datasets },
-                options: {
-                    responsive: true,
-                    animation: { duration: 280 },
-                    indexAxis: isHBar ? 'y' : 'x',
-                    plugins: {
-                        legend: { display: !!(isDonut||isRadar||datasets.length>1), labels: { color:'#8aaabb', font:{ size:11 }, boxWidth:12 } },
-                        title: { display: !!spec.options?.title, text: spec.options?.title||'', color:'#c8d8e8', font:{ size:13, weight:'500' } },
-                        tooltip: { backgroundColor:'rgba(6,8,16,0.92)', titleColor:'#c8d8e8', bodyColor:'#8aaabb', borderColor:'#1e3048', borderWidth:1, padding:10, callbacks:{
-                            label: ctx => {
-                                const v = ctx.parsed?.y ?? ctx.parsed;
-                                return ' ' + (ctx.dataset.label ? ctx.dataset.label + ': ' : '') + (typeof v==='number' ? v.toLocaleString() : v);
-                            }
-                        }},
-                    },
-                    scales: (isDonut||isRadar) ? (isRadar ? { r:{ ticks:{ color:'#556677', backdropColor:'transparent' }, grid:{ color:'rgba(255,255,255,0.08)' }, pointLabels:{ color:'#8aaabb', font:{size:11} } } } : {}) : {
-                        x: { stacked: isStacked, ticks:{ color:'#556677', maxRotation:45 }, grid:{ color:'rgba(255,255,255,0.05)' }, title:{ display:!!spec.options?.xLabel, text:spec.options?.xLabel||'', color:'#556677', font:{size:11} } },
-                        y: { stacked: isStacked, ticks:{ color:'#556677' }, grid:{ color:'rgba(255,255,255,0.05)' }, title:{ display:!!spec.options?.yLabel, text:spec.options?.yLabel||'', color:'#556677', font:{size:11} } },
-                    },
-                },
-            });
-            _chartCache.set(container, inst);
-
-            // Export PNG
-            addExportBtn(container, () => new Promise(res => canvas.toBlob(res, 'image/png')), (spec.options?.title||type)+'.png');
-        }
-
-        // ── Table ─────────────────────────────────────────────────
-        function renderTable(spec, container) {
-            const { headers=[], rows=[], options={} } = spec;
-            let sortCol = -1, sortAsc = true;
-            const wrap = document.createElement('div');
-            wrap.style.cssText = 'overflow-x:auto;border-radius:8px;border:1px solid #1e2535;';
-
-            function buildTable() {
-                const sorted = sortCol >= 0 ? [...rows].sort((a,b) => {
-                    const av = a[sortCol], bv = b[sortCol];
-                    const n = (v) => !isNaN(parseFloat(v));
-                    const cmp = n(av) && n(bv) ? parseFloat(av)-parseFloat(bv) : String(av).localeCompare(String(bv));
-                    return sortAsc ? cmp : -cmp;
-                }) : rows;
-
-                // Theme-aware: classes instead of dark inline hex (Ivory was stuck light-black)
-                let html = `<table class="aether-data-table" style="width:100%;border-collapse:collapse;font-size:.78rem;font-family:var(--font-mono,monospace);">`;
-                if (headers.length) {
-                    html += '<thead><tr>' + headers.map((h,i) => {
-                        const active = sortCol === i;
-                        const icon = active ? (sortAsc ? ' ↑' : ' ↓') : '';
-                        return `<th data-col="${i}" class="aether-data-th" style="font-weight:600;padding:9px 12px;text-align:left;cursor:pointer;user-select:none;white-space:nowrap;">${escHtml(h)}${icon}</th>`;
-                    }).join('') + '</tr></thead>';
-                }
-                html += '<tbody>' + sorted.map((row, ri) =>
-                    `<tr class="${ri % 2 === 0 ? 'row-even' : 'row-odd'}">` +
-                    row.map(cell => `<td style="padding:8px 12px;white-space:nowrap;">${escHtml(cell)}</td>`).join('') +
-                    '</tr>'
-                ).join('') + '</tbody></table>';
-                wrap.innerHTML = html;
-
-                // Sort click
-                wrap.querySelectorAll('th[data-col]').forEach(th => {
-                    th.onclick = () => {
-                        const col = +th.dataset.col;
-                        if (sortCol === col) sortAsc = !sortAsc;
-                        else { sortCol = col; sortAsc = true; }
-                        buildTable();
-                    };
-                });
-            }
-            buildTable();
-            container.appendChild(wrap);
-
-            // Export CSV
-            addExportBtn(container, () => {
-                const lines = [headers.join(','), ...rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(','))];
-                return Promise.resolve(new Blob([lines.join('\n')], { type:'text/csv' }));
-            }, (spec.options?.title||'table')+'.csv');
-        }
-
-        // ── Gantt ─────────────────────────────────────────────────
-        function renderGantt(spec, container) {
-            const tasks = spec.tasks || [];
-            if (!tasks.length) { vizErr(container, 'No tasks'); return; }
-            const PAD = 24, LABEL_W = 160, ROW_H = 36, HEADER_H = 40;
-            const allDates = tasks.flatMap(t => [new Date(t.start), new Date(t.end)]);
-            const minD = new Date(Math.min(...allDates)), maxD = new Date(Math.max(...allDates));
-            const totalMs = maxD - minD;
-            const W = 800, chartW = W - LABEL_W - PAD*2;
-            const H = HEADER_H + tasks.length * ROW_H + PAD;
-
-            let svg = `<svg width="100%" viewBox="0 0 ${W} ${H}" font-family="system-ui" font-size="11">`;
-            // Header background
-            svg += `<rect x="0" y="0" width="${W}" height="${HEADER_H}" fill="#0a1018"/>`;
-            // Month labels
-            const ms = new Date(minD); ms.setDate(1);
-            while (ms <= maxD) {
-                const x = LABEL_W + PAD + ((ms - minD) / totalMs) * chartW;
-                svg += `<text x="${x}" y="${HEADER_H/2}" dominant-baseline="central" fill="#556677" font-size="10">${ms.toLocaleString('default',{month:'short'})}</text>`;
-                svg += `<line x1="${x}" y1="${HEADER_H}" x2="${x}" y2="${H}" stroke="#1e2535" stroke-width="1"/>`;
-                ms.setMonth(ms.getMonth()+1);
-            }
-            // Today line
-            const todayX = LABEL_W + PAD + ((Date.now() - minD) / totalMs) * chartW;
-            if (todayX > LABEL_W && todayX < W) {
-                svg += `<line x1="${todayX}" y1="${HEADER_H}" x2="${todayX}" y2="${H}" stroke="#00f3ff" stroke-width="1" stroke-dasharray="4 3" opacity="0.5"/>`;
-                svg += `<text x="${todayX+4}" y="${HEADER_H+12}" fill="#00f3ff" font-size="9" opacity="0.7">today</text>`;
-            }
-
-            tasks.forEach((t, i) => {
-                const y = HEADER_H + i * ROW_H;
-                const tx = LABEL_W + PAD + ((new Date(t.start) - minD) / totalMs) * chartW;
-                const tw = Math.max(4, ((new Date(t.end) - new Date(t.start)) / totalMs) * chartW);
-                const col = vcPalette(i);
-                const bg = i%2===0 ? '#060810' : '#080e16';
-                svg += `<rect x="0" y="${y}" width="${W}" height="${ROW_H}" fill="${bg}"/>`;
-                svg += `<text x="${LABEL_W-8}" y="${y+ROW_H/2}" text-anchor="end" dominant-baseline="central" fill="#8aaabb" font-size="11">${escHtml(t.label||t.name||t.task||'Task')}</text>`;
-                svg += `<rect x="${tx}" y="${y+6}" width="${tw}" height="${ROW_H-12}" rx="4" fill="${col}33" stroke="${col}" stroke-width="1"/>`;
-                if (tw > 40) svg += `<text x="${tx+tw/2}" y="${y+ROW_H/2}" text-anchor="middle" dominant-baseline="central" fill="${col}" font-size="10">${escHtml(t.label||t.name||'')}</text>`;
-                if (t.progress != null) {
-                    const pw = tw * Math.min(1, Math.max(0, t.progress/100));
-                    svg += `<rect x="${tx}" y="${y+ROW_H-8}" width="${pw}" height="3" rx="1" fill="${col}" opacity="0.7"/>`;
-                }
-            });
-            svg += '</svg>';
-            container.innerHTML = svg;
-
-            addExportBtn(container, () => Promise.resolve(new Blob([svg], { type:'image/svg+xml' })), (spec.options?.title||'gantt')+'.svg');
-        }
-
-        // ── Heatmap ───────────────────────────────────────────────
-        function renderHeatmap(spec, container) {
-            const { data=[], xLabels=[], yLabels=[], options={} } = spec;
-            if (!data.length) { vizErr(container, 'No data'); return; }
-            const allVals = data.flat().filter(v => v != null);
-            const minV = Math.min(...allVals), maxV = Math.max(...allVals);
-            const CELL = 44, PAD = 8, LABEL_H = 64, LABEL_W = 80;
-            const W = LABEL_W + xLabels.length * CELL + PAD;
-            const H = LABEL_H + yLabels.length * CELL + PAD;
-            const baseColor = options.color || '#378ADD';
-            const hex2rgb = h => { const r=parseInt(h.slice(1,3),16), g=parseInt(h.slice(3,5),16), b=parseInt(h.slice(5,7),16); return [r,g,b]; };
-            const [br,bg,bb] = hex2rgb(baseColor);
-            let svg = `<svg width="100%" viewBox="0 0 ${W} ${H}" font-family="system-ui">`;
-            xLabels.forEach((l,i) => {
-                svg += `<text x="${LABEL_W+i*CELL+CELL/2}" y="${LABEL_H-8}" text-anchor="middle" fill="#556677" font-size="10" transform="rotate(-35,${LABEL_W+i*CELL+CELL/2},${LABEL_H-8})">${escHtml(l)}</text>`;
-            });
-            yLabels.forEach((l,i) => {
-                svg += `<text x="${LABEL_W-8}" y="${LABEL_H+i*CELL+CELL/2}" text-anchor="end" dominant-baseline="central" fill="#556677" font-size="10">${escHtml(l)}</text>`;
-            });
-            data.forEach((row,ri) => row.forEach((val,ci) => {
-                if (val == null) return;
-                const t = maxV===minV ? 0.5 : (val-minV)/(maxV-minV);
-                const r=Math.round(br*t+20*(1-t)), g=Math.round(bg*t+30*(1-t)), b=Math.round(bb*t+50*(1-t));
-                const x = LABEL_W+ci*CELL, y = LABEL_H+ri*CELL;
-                svg += `<rect x="${x+2}" y="${y+2}" width="${CELL-4}" height="${CELL-4}" rx="4" fill="rgba(${r},${g},${b},${0.3+t*0.7})"/>`;
-                svg += `<text x="${x+CELL/2}" y="${y+CELL/2}" text-anchor="middle" dominant-baseline="central" font-size="10" fill="${t>0.5?'#c8d8e8':'#8aaabb'}">${typeof val==='number'?val.toLocaleString():val}</text>`;
-            }));
-            svg += '</svg>';
-            container.innerHTML = svg;
-            addExportBtn(container, () => Promise.resolve(new Blob([svg], { type:'image/svg+xml' })), 'heatmap.svg');
-        }
-
-        // ── Timeline ──────────────────────────────────────────────
-        function renderTimeline(spec, container) {
-            const events = spec.events || [];
-            if (!events.length) { vizErr(container, 'No events'); return; }
-            const PAD = 24, ITEM_H = 64, DOT_R = 7, LINE_X = 120;
-            const H = PAD + events.length * ITEM_H + PAD;
-            let svg = `<svg width="100%" viewBox="0 0 700 ${H}" font-family="system-ui">`;
-            svg += `<line x1="${LINE_X}" y1="${PAD}" x2="${LINE_X}" y2="${H-PAD}" stroke="#1e3048" stroke-width="2"/>`;
-            events.forEach((ev, i) => {
-                const y = PAD + i * ITEM_H + ITEM_H/2;
-                const col = vcPalette(i);
-                svg += `<circle cx="${LINE_X}" cy="${y}" r="${DOT_R}" fill="${col}" stroke="#060810" stroke-width="2"/>`;
-                if (ev.date || ev.time) svg += `<text x="${LINE_X-16}" y="${y}" text-anchor="end" dominant-baseline="central" fill="#556677" font-size="10">${escHtml(ev.date||ev.time)}</text>`;
-                svg += `<text x="${LINE_X+20}" y="${y-(ev.description?8:0)}" dominant-baseline="central" fill="#c8d8e8" font-size="13" font-weight="500">${escHtml(ev.label||ev.title||ev.event)}</text>`;
-                if (ev.description) svg += `<text x="${LINE_X+20}" y="${y+14}" dominant-baseline="central" fill="#556677" font-size="11">${escHtml(ev.description)}</text>`;
-            });
-            svg += '</svg>';
-            container.innerHTML = svg;
-            addExportBtn(container, () => Promise.resolve(new Blob([svg], { type:'image/svg+xml' })), 'timeline.svg');
-        }
-
-        // ── Flow diagram ──────────────────────────────────────────
-        function renderFlow(spec, container) {
-            const nodes = spec.nodes || [], edges = spec.edges || [];
-            const layout = (spec.layout || 'TB').toUpperCase();
-            const NW = 140, NH = 48, GAPX = 70, GAPY = 80, PAD = 30;
-
-            // Topological rank
-            const rank = {}; nodes.forEach(n => { rank[n.id] = 0; });
-            let changed = true;
-            for (let pass = 0; pass < nodes.length && changed; pass++) {
-                changed = false;
-                edges.forEach(e => { if (rank[e.to] <= rank[e.from]) { rank[e.to] = rank[e.from] + 1; changed = true; } });
-            }
-            const layers = [];
-            nodes.forEach(n => { const r = rank[n.id]||0; (layers[r]=layers[r]||[]).push(n); });
-
-            // Radial layout
-            if (layout === 'RADIAL') {
-                const cx = 320, cy = 280, R_INNER = 90, R_OUTER = 220;
-                const pos = {};
-                const center = nodes.find(n => !edges.some(e => e.to === n.id)) || nodes[0];
-                if (center) pos[center.id] = { x: cx - NW/2, y: cy - NH/2 };
-                const rest = nodes.filter(n => n.id !== center?.id);
-                rest.forEach((n, i) => {
-                    const angle = (i / rest.length) * Math.PI * 2 - Math.PI/2;
-                    const r = rest.length > 6 ? R_OUTER : R_INNER + 40;
-                    pos[n.id] = { x: cx + Math.cos(angle)*r - NW/2, y: cy + Math.sin(angle)*r - NH/2 };
-                });
-                return renderFlowPositioned(spec, container, pos, nodes, edges, NW, NH, 700, 580);
-            }
-
-            const pos = {};
-            let maxX = 0, maxY = 0;
-            if (layout === 'LR') {
-                layers.forEach((layer, li) => {
-                    const x = PAD + li * (NW + GAPX);
-                    const totalH = layer.length * (NH + GAPY) - GAPY;
-                    layer.forEach((n, ni) => {
-                        const y = PAD + ni * (NH + GAPY) + (totalH < 300 ? (300-totalH)/2 : 0);
-                        pos[n.id] = { x, y }; maxX = Math.max(maxX, x+NW); maxY = Math.max(maxY, y+NH);
-                    });
-                });
-            } else { // TB (default)
-                layers.forEach((layer, li) => {
-                    const y = PAD + li * (NH + GAPY);
-                    const totalW = layer.length * (NW + GAPX) - GAPX;
-                    layer.forEach((n, ni) => {
-                        const x = PAD + ni * (NW + GAPX) + (totalW < 400 ? (400-totalW)/2 : 0);
-                        pos[n.id] = { x, y }; maxX = Math.max(maxX, x+NW); maxY = Math.max(maxY, y+NH);
-                    });
-                });
-            }
-            return renderFlowPositioned(spec, container, pos, nodes, edges, NW, NH, maxX+PAD, maxY+PAD);
-        }
-
-        function renderFlowPositioned(spec, container, pos, nodes, edges, NW, NH, maxX, maxY) {
-            let edgeSvg = '', nodeSvg = '';
-            edges.forEach(e => {
-                const s = pos[e.from], t = pos[e.to]; if (!s||!t) return;
-                const x1 = s.x+NW/2, y1 = s.y+NH, x2 = t.x+NW/2, y2 = t.y;
-                const isBack = s.y >= t.y && s.x === t.x;
-                if (isBack) {
-                    const cx = Math.max(x1,x2)+50;
-                    edgeSvg += `<path d="M${x1} ${s.y+NH/2} L${cx} ${s.y+NH/2} L${cx} ${t.y+NH/2} L${x2} ${t.y+NH/2}" fill="none" stroke="#334455" stroke-width="1.5" stroke-dasharray="5 3" marker-end="url(#av-arrow)"/>`;
-                } else {
-                    const mx = (x1+x2)/2, my = (y1+y2)/2;
-                    edgeSvg += `<path d="M${x1} ${y1} C${x1} ${my+20},${x2} ${my-20},${x2} ${y2}" fill="none" stroke="#334455" stroke-width="1.5" marker-end="url(#av-arrow)"/>`;
-                    if (e.label) edgeSvg += `<text x="${mx+6}" y="${my}" font-size="10" fill="#556677" font-family="system-ui">${escHtml(e.label)}</text>`;
-                }
-            });
-            nodes.forEach(n => {
-                const {x,y} = pos[n.id] || {x:0,y:0};
-                const c = vc(n.color||'gray');
-                const shape = n.shape || 'rect';
-                const ty = n.sub ? y+NH*0.36 : y+NH/2;
-                if (shape === 'diamond') {
-                    const cx2 = x+NW/2, cy2 = y+NH/2;
-                    nodeSvg += `<g><polygon points="${cx2},${y} ${x+NW},${cy2} ${cx2},${y+NH} ${x},${cy2}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="1"/>`;
-                } else if (shape === 'circle') {
-                    nodeSvg += `<g><ellipse cx="${x+NW/2}" cy="${y+NH/2}" rx="${NW/2}" ry="${NH/2}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="1"/>`;
-                } else {
-                    nodeSvg += `<g><rect x="${x}" y="${y}" width="${NW}" height="${NH}" rx="8" fill="${c.fill}" stroke="${c.stroke}" stroke-width="1"/>`;
-                }
-                nodeSvg += `<text x="${x+NW/2}" y="${ty}" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="500" fill="${c.text}" font-family="system-ui">${escHtml(n.label||n.id)}</text>`;
-                if (n.sub) nodeSvg += `<text x="${x+NW/2}" y="${y+NH*0.72}" text-anchor="middle" dominant-baseline="central" font-size="9" fill="${c.stroke}" font-family="system-ui">${escHtml(n.sub)}</text>`;
-                nodeSvg += '</g>';
-            });
-            const W = clamp(maxX, 300, 1000), H = clamp(maxY, 100, 1400);
-            const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-            svg.setAttribute('width','100%'); svg.setAttribute('viewBox',`0 0 ${W} ${H}`); svg.style.overflow = 'visible';
-            svg.innerHTML = ARROW + edgeSvg + nodeSvg;
-            container.appendChild(svg);
-            addExportBtn(container, () => {
-                const s = new XMLSerializer().serializeToString(svg);
-                return Promise.resolve(new Blob([s], { type:'image/svg+xml' }));
-            }, (spec.options?.title||'flow')+'.svg');
-        }
-
-        // ── Struct diagram ────────────────────────────────────────
-        function renderStruct(spec, container) {
-            const regions = spec.regions||[], W = 640, PAD = 20, OUTER_X = 20, OUTER_Y = 20, OUTER_W = W-40, R_H = spec.layout?.regionHeight||110, GAP = 12;
-            const totalW = OUTER_W-PAD*2;
-            const rW = regions.length > 0 ? Math.floor((totalW-(regions.length-1)*GAP)/regions.length) : totalW;
-            const OUTER_H = R_H+70; const c = vc(spec.color||'purple');
-            let rSvg = '';
-            regions.forEach((r,i) => {
-                const rx = OUTER_X+PAD+(rW+GAP)*i, ry = OUTER_Y+48, rc = vc(r.color||'blue');
-                rSvg += `<rect x="${rx}" y="${ry}" width="${rW}" height="${R_H}" rx="8" fill="${rc.fill}" stroke="${rc.stroke}" stroke-width="0.5"/>
-                    <text x="${rx+rW/2}" y="${ry+(r.sub?36:R_H/2)}" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="500" fill="${rc.text}" font-family="system-ui">${escHtml(r.label)}</text>
-                    ${r.sub ? `<text x="${rx+rW/2}" y="${ry+60}" text-anchor="middle" dominant-baseline="central" font-size="10" fill="${rc.stroke}" font-family="system-ui">${escHtml(r.sub)}</text>` : ''}`;
-            });
-            const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-            svg.setAttribute('width','100%'); svg.setAttribute('viewBox',`0 0 ${W} ${OUTER_H+40}`);
-            svg.innerHTML = `<rect x="${OUTER_X}" y="${OUTER_Y}" width="${OUTER_W}" height="${OUTER_H}" rx="14" fill="${c.fill}" stroke="${c.stroke}" stroke-width="0.5" stroke-dasharray="6 4"/>
-                <text x="${OUTER_X+16}" y="${OUTER_Y+24}" dominant-baseline="central" font-size="12" font-weight="500" fill="${c.text}" font-family="system-ui">${escHtml(spec.label||'Container')}</text>${rSvg}`;
-            container.appendChild(svg);
-            addExportBtn(container, () => {
-                const s = new XMLSerializer().serializeToString(svg);
-                return Promise.resolve(new Blob([s], { type:'image/svg+xml' }));
-            }, 'struct.svg');
-        }
-
-        // ── Mermaid ───────────────────────────────────────────────
-        let _mermaidReady = false;
-        async function ensureMermaid() {
-            if (_mermaidReady || window.__aether_mermaid) return;
-            if (!window.mermaid) {
-                try {
-                    const { default: m } = await import('https://esm.sh/mermaid@11/dist/mermaid.esm.min.mjs');
-                    window.__aether_mermaid = m;
-                } catch(e) { throw new Error('Mermaid not available'); }
-            } else { window.__aether_mermaid = window.mermaid; }
-
-            window.__aether_mermaid.initialize({
-                startOnLoad: false,
-                theme: 'base',
-                fontFamily: 'system-ui, sans-serif',
-                themeVariables: {
-                    darkMode: true,
-                    background: '#060810',
-                    primaryColor: '#0d1520',
-                    primaryTextColor: '#c8d8e8',
-                    primaryBorderColor: '#1e3048',
-                    secondaryColor: '#0a1018',
-                    tertiaryColor: '#060810',
-                    lineColor: '#334455',
-                    textColor: '#8aaabb',
-                    edgeLabelBackground: '#060810',
-                    clusterBkg: '#0a1018',
-                    clusterBorder: '#1e3048',
-                    titleColor: '#c8d8e8',
-                    nodeTextColor: '#c8d8e8',
-                    fontSize: '13px',
-                }
-            });
-            _mermaidReady = true;
-        }
-
-        async function renderMermaid(syntax, container) {
-            await ensureMermaid();
-            const id = 'av-mermaid-' + Math.random().toString(36).slice(2);
-            const { svg } = await window.__aether_mermaid.render(id, syntax);
-            container.innerHTML = svg;
-            // Fix Mermaid SVG background
-            const svgEl = container.querySelector('svg');
-            if (svgEl) { svgEl.style.background = 'transparent'; svgEl.setAttribute('width','100%'); }
-            addExportBtn(container, () => Promise.resolve(new Blob([svg], { type:'image/svg+xml' })), 'diagram.svg');
-        }
-
-        // ── Master render ─────────────────────────────────────────
-        async function render(spec, container) {
-            if (!spec || !spec.type) throw new Error('No type in spec');
-            baseContainer(container);
-            switch (spec.type) {
-                case 'bar':           await renderChart(spec, container, 'bar');          break;
-                case 'bar-horizontal':
-                case 'horizontal-bar': await renderChart(spec, container, 'bar-horizontal'); break;
-                case 'stacked-bar':   await renderChart(spec, container, 'stacked-bar'); break;
-                case 'stacked-line':  await renderChart(spec, container, 'stacked-line'); break;
-                case 'line':          await renderChart(spec, container, 'line');         break;
-                case 'area':          await renderChart(spec, container, 'area');         break;
-                case 'donut':
-                case 'pie':           await renderChart(spec, container, 'donut');        break;
-                case 'scatter':       await renderChart(spec, container, 'scatter');      break;
-                case 'bubble':        await renderChart(spec, container, 'bubble');       break;
-                case 'radar':
-                case 'spider':        await renderChart(spec, container, 'radar');        break;
-                case 'flow':          renderFlow(spec, container);                        break;
-                case 'struct':        renderStruct(spec, container);                      break;
-                case 'table':         renderTable(spec, container);                       break;
-                case 'gantt':         renderGantt(spec, container);                       break;
-                case 'heatmap':       renderHeatmap(spec, container);                     break;
-                case 'timeline':      renderTimeline(spec, container);                    break;
-                case 'svg':
-                    if (!spec.svg) throw new Error('No svg field');
-                    container.innerHTML = sanitizeSVG(spec.svg);
-                    addExportBtn(container, () => Promise.resolve(new Blob([spec.svg], { type:'image/svg+xml' })), 'diagram.svg');
-                    break;
-                default: throw new Error('Unknown spec type: ' + spec.type);
-            }
-        }
-
-        async function autoDetect(text, container) {
-            const spec = extractSpec(text);
-            if (spec) {
-                try { await render(spec, container); return true; }
-                catch(e) { vizErr(container, e.message, spec); return true; }
-            }
-            const mmd = extractMermaid(text);
-            if (mmd) {
-                try { baseContainer(container); await renderMermaid(mmd, container); return true; }
-                catch(e) { vizErr(container, e.message, mmd); return true; }
-            }
-            return false;
-        }
-
-        window.AetherVisualizer = { render, renderMermaid, autoDetect, extractSpec, extractMermaid, sanitizeSVG, colors: VIZ_COLORS, palette: VIZ_PALETTE };
-    })();
 
     // ═══════════════════════════════════════════════════════════
     // Yes, it has edge cases. No, we're not fixing all of them.
@@ -14738,6 +14176,13 @@ ${result}`));
                                         if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.stabilizeForStream) {
                                             sanitizedDisplay = AETHER_Markdown.stabilizeForStream(sanitizedDisplay);
                                         }
+                                        // Viz v2: hide incomplete open ```viz fences mid-stream
+                                        if (window.AetherVisualizer && AetherVisualizer.stabilizeStream) {
+                                            try {
+                                                const vst = AetherVisualizer.stabilizeStream(sanitizedDisplay);
+                                                if (vst && vst.pending) sanitizedDisplay = vst.display;
+                                            } catch (_) {}
+                                        }
                                         aetherMsg.innerHTML = '';
                                         aetherMsg.appendChild(parseMarkdown(sanitizedDisplay, { stream: true }));
                                     }
@@ -14829,25 +14274,28 @@ ${result}`));
                     try { vizRendered = await window._tryDiscoverySkillRender?.(sanitized, aetherMsg) || false; } catch(e) {}
                 }
 
-                // Step 3: AetherVisualizer
+                // Step 3: AetherVisualizer v2 — multi-spec, remainder markdown, fail→markdown
                 if (!vizRendered && window.AetherVisualizer) {
                     try {
                         const vizEl = document.createElement('div');
                         vizEl.className = 'aether-viz-container';
-                        const didRender = await window.AetherVisualizer.autoDetect(sanitized, vizEl);
+                        const r = await window.AetherVisualizer.autoDetect(sanitized, vizEl);
+                        const didRender = r && (r.rendered === true || r === true);
                         if (didRender) {
                             vizRendered = true;
-                            const stripped = sanitized
-                                .replace(/```json[\s\S]*?```/g, '')
-                                .replace(/```mermaid[\s\S]*?```/g, '')
-                                .trim();
-                            if (stripped) {
+                            const remainder = (r && typeof r.remainder === 'string')
+                                ? r.remainder
+                                : sanitized
+                                    .replace(/```(?:aether-viz|viz|json|chart|visuali[sz]er|mermaid)[\s\S]*?```/gi, '')
+                                    .trim();
+                            if (remainder) {
                                 const mdEl = document.createElement('div');
-                                mdEl.appendChild(parseMarkdown(stripped));
+                                mdEl.appendChild(parseMarkdown(remainder));
                                 aetherMsg.appendChild(mdEl);
                             }
                             aetherMsg.appendChild(vizEl);
                         }
+                        // r.failed / all errors → fall through to markdown (Phase A)
                     } catch(e) { console.warn('[AETHER] Visualizer error:', e.message); }
                 }
 
@@ -17387,6 +16835,21 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                 }).join('\n')
             );
         } },
+        { id:'viztest',   label:'/viztest', desc:'AetherViz v2 golden fixtures', group:'System', action: () => {
+            if (typeof AetherVisualizer === 'undefined' || !AetherVisualizer.runGoldenFixtures) {
+                addSystemMessage('Visualizer offline');
+                return;
+            }
+            const r = AetherVisualizer.runGoldenFixtures();
+            addSystemMessage(
+                '**AetherViz v' + r.version + '** (`' + r.schema + '`) — ' +
+                (r.ok ? '✓ PASS' : '✗ FAIL') + ' · ' + r.passed + '/' + r.total + '\n\n' +
+                r.results.map(function (x) {
+                    return (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : '');
+                }).join('\n') +
+                (AetherVisualizer.typeListMarkdown ? '\n\n' + AetherVisualizer.typeListMarkdown() : '')
+            );
+        } },
         { id:'onboard',   label:'/onboard', desc:'Replay first-run onboarding wizard', group:'System', action: () => {
             if (typeof AETHER_Ship !== 'undefined') AETHER_Ship.openOnboarding(true);
             else showNotification('Ship offline', 'warn');
@@ -18015,7 +17478,20 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.38', date: 'July 2026', tag: 'latest',
+            version: 'v5.39', date: 'July 2026', tag: 'latest',
+            headline: 'AetherViz v2 — multi-spec artifact runtime',
+            notes: [
+                { type:'new',  text:'core/aether-visualizer.js v2 — modular engine, schema aether-viz-v1' },
+                { type:'fix',  text:'normalizeSpec — flow · struct · svg · table no longer dropped' },
+                { type:'new',  text:'MULTI-SPEC — all ```viz / ```aether-viz / mermaid blocks in one reply render' },
+                { type:'fix',  text:'Render errors fall through to markdown (no silent swallow)' },
+                { type:'new',  text:'STREAM-STABLE open viz fences; mobile export bar; Folder save under aether-viz/' },
+                { type:'new',  text:'Mermaid SVG sanitized; Ivory chart theme tokens; /viztest goldens + shipcheck gate' },
+                { type:'new',  text:'Kernel + Moat record viz.render events' },
+            ],
+        },
+        {
+            version: 'v5.38', date: 'July 2026', tag: '',
             headline: 'Light Boot — less RAM, snappier first paint',
             notes: [
                 { type:'perf', text:'LAZY CDN — onnx/OCR/prettier/mermaid/chart/pdf/puter no longer load at boot' },
@@ -19282,11 +18758,11 @@ NODE COLORS: blue | purple | teal | amber | coral | pink | green | red | gray | 
 NODE SHAPES (flow only): add "shape":"diamond" or "shape":"circle" to any node
 
 RULES:
-- Output raw JSON with NO code fences (renderer auto-detects JSON)
-- For Mermaid use triple-backtick mermaid fence
-- After JSON you can add markdown analysis
-- Multiple specs in one response all render independently
-- Choose the right type: use table for structured comparisons, radar for multi-axis scoring, gantt for planning, heatmap for density data`,
+- Prefer fenced blocks: triple-backtick viz or aether-viz with JSON inside (most reliable)
+- Raw JSON with a "type" field also works; Mermaid uses triple-backtick mermaid fence
+- After specs you can add markdown analysis
+- Multiple ```viz blocks in one response all render independently
+- Choose the right type: table for comparisons, radar for multi-axis, gantt for planning, heatmap for density`,
             tools: [],
             workflows: {
                 barChart:    { steps:['Collect labels','Collect values','Assign colors','Output bar JSON'], desc:'Bar chart from data' },

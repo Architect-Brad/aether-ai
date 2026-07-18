@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AETHER Visualizer Golden</title>
+  <style>
+    body { font-family: ui-monospace, monospace; background: #0a0a0f; color: #cde; padding: 24px; }
+    h1 { color: #00f3ff; font-size: 1.1rem; }
+    .ok { color: #1d9e75; } .fail { color: #e24b4a; }
+    pre { background: #12121a; padding: 12px; border-radius: 8px; overflow: auto; }
+    .demo { margin-top: 16px; padding: 12px; border: 1px solid #1e2535; border-radius: 8px; }
+  </style>
+  <script src="../core/aether-visualizer.js"></script>
+</head>
+<body>
+  <h1>AETHER Visualizer v2 — Golden</h1>
+  <p id="summary">Running…</p>
+  <pre id="out"></pre>
+  <div class="demo" id="demo"></div>
+  <script>
+    var r = AetherVisualizer.runGoldenFixtures();
+    document.getElementById('summary').innerHTML =
+      '<span class="' + (r.ok ? 'ok' : 'fail') + '">' + (r.ok ? 'PASS' : 'FAIL') +
+      '</span> · ' + r.passed + '/' + r.total + ' · engine v' + r.version + ' · ' + r.schema;
+    document.getElementById('out').textContent = r.results.map(function (x) {
+      return (x.pass ? '✓' : '✗') + ' ' + x.name + (x.detail ? ' — ' + x.detail : '');
+    }).join('\n');
+
+    // Live demo: multi-spec
+    (async function () {
+      var host = document.getElementById('demo');
+      var sample =
+        'Analysis below.\n\n```viz\n' +
+        JSON.stringify({
+          type: 'flow',
+          nodes: [
+            { id: 'a', label: 'User', color: 'blue' },
+            { id: 'b', label: 'AetherViz', color: 'teal' },
+            { id: 'c', label: 'Chat', color: 'purple' },
+          ],
+          edges: [
+            { from: 'a', to: 'b', label: 'spec' },
+            { from: 'b', to: 'c', label: 'render' },
+          ],
+        }) +
+        '\n```\n\n```viz\n' +
+        JSON.stringify({
+          type: 'table',
+          headers: ['Phase', 'Status'],
+          rows: [['A fix', 'done'], ['B module', 'done'], ['C stream', 'done']],
+        }) +
+        '\n```\nDone.';
+      var result = await AetherVisualizer.autoDetect(sample, host);
+      var note = document.createElement('p');
+      note.style.fontSize = '.7rem';
+      note.style.color = '#667';
+      note.textContent =
+        'Demo autoDetect: rendered=' + result.rendered +
+        ' count=' + result.count +
+        ' remainder="' + (result.remainder || '').slice(0, 40) + '"';
+      host.appendChild(note);
+    })();
+  </script>
+</body>
+</html>

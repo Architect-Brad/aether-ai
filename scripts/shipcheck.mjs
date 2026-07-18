@@ -176,6 +176,53 @@ function main() {
   sandbox.self = sandbox;
   sandbox.HTMLElement = function () {};
   sandbox.Node = function () {};
+  // Minimal DOMParser / XMLSerializer for viz sanitize goldens
+  sandbox.DOMParser = function () {
+    this.parseFromString = function (str) {
+      var hasScript = /<script/i.test(str);
+      var fake = {
+        documentElement: {
+          nodeType: 1,
+          tagName: 'svg',
+          attributes: [],
+          childNodes: hasScript
+            ? [{ nodeType: 1, tagName: 'script', attributes: [], childNodes: [], parentNode: null, removeAttribute: function () {}, getAttribute: function () { return null; }, setAttribute: function () {} }]
+            : [{ nodeType: 1, tagName: 'rect', attributes: [], childNodes: [], parentNode: null, removeAttribute: function () {}, getAttribute: function () { return null; }, setAttribute: function () {} }],
+          parentNode: null,
+          removeAttribute: function () {},
+          getAttribute: function () { return null; },
+          setAttribute: function () {},
+        },
+        querySelector: function (sel) {
+          if (/parseerror/i.test(sel) && /<<<<|error/i.test(str)) return {};
+          return null;
+        },
+      };
+      // Wire parentNode for removeChild
+      fake.documentElement.childNodes.forEach(function (ch) {
+        ch.parentNode = {
+          removeChild: function (n) {
+            fake.documentElement.childNodes = fake.documentElement.childNodes.filter(function (x) {
+              return x !== n;
+            });
+          },
+        };
+      });
+      return fake;
+    };
+  };
+  sandbox.XMLSerializer = function () {
+    this.serializeToString = function (el) {
+      if (!el) return '';
+      var kids = (el.childNodes || [])
+        .map(function (c) {
+          return c.tagName ? '<' + c.tagName + '/>' : '';
+        })
+        .join('');
+      return '<' + (el.tagName || 'svg') + '>' + kids + '</' + (el.tagName || 'svg') + '>';
+    };
+  };
+  sandbox.performance = { now: () => Date.now() };
   vm.createContext(sandbox);
 
   const modules = [
@@ -190,6 +237,7 @@ function main() {
     'core/aether-deep-research.js',
     'core/aether-moat.js',
     'core/ghost-commits.js',
+    'core/aether-visualizer.js',
     'core/aether-ship.js',
   ];
 
@@ -369,11 +417,29 @@ function main() {
     lines.push('safe-math: ' + four);
   }
 
+  // Visualizer goldens (hard gate for aether-viz-v1)
+  if (sandbox.AetherVisualizer && sandbox.AetherVisualizer.runGoldenFixtures) {
+    const vg = sandbox.AetherVisualizer.runGoldenFixtures();
+    lines.push(
+      'visualizer: ' + vg.passed + '/' + vg.total + (vg.ok ? ' PASS' : ' FAIL') + ' · v' + vg.version
+    );
+    if (!vg.ok) {
+      failures.push('visualizer');
+      (vg.results || [])
+        .filter((r) => !r.pass)
+        .forEach((r) => lines.push('  ✗ ' + r.name + (r.detail ? ' — ' + r.detail : '')));
+    }
+  } else {
+    failures.push('visualizer offline');
+    lines.push('visualizer: OFFLINE');
+  }
+
   // Structural file checks
   const mustExist = [
     'core/version.js',
     'core/aether-markdown.js',
     'core/aether-tool-runtime.js',
+    'core/aether-visualizer.js',
     'core/aether-ship.js',
     'core/ghost-commits.js',
     'core/aether-rag-v2.js',

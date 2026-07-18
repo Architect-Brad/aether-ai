@@ -7,8 +7,8 @@
  */
 (function (g) {
   'use strict';
-  var VERSION = '5.38';
-  var CODENAME = 'Light Boot';
+  var VERSION = '5.39';
+  var CODENAME = 'Viz v2';
   var BUILD = '2026.07.18';
 
   g.AETHER_VERSION = VERSION;

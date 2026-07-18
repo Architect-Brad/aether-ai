@@ -10621,6 +10621,37 @@ input:focus, textarea:focus, select:focus {
     border: 1px solid rgba(255,255,255,0.06);
     border-radius: 10px;
     overflow: hidden;
+    position: relative;
+}
+.aether-viz-slot + .aether-viz-slot { margin-top: 12px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 12px; }
+.aether-viz-error {
+    padding: 12px 14px; color: #e08080; font-size: .72rem;
+    border: 1px solid rgba(200,80,80,0.25); border-radius: 8px; background: rgba(200,80,80,0.05);
+}
+.aether-viz-error-details { margin-top: 6px; }
+.aether-viz-error-details pre { font-size: .65rem; color: #6a5a5a; margin: 6px 0 0; white-space: pre-wrap; }
+/* Always-visible export bar (mobile-friendly — was hover-only) */
+.aether-viz-export-bar {
+    display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;
+    margin-top: 10px; padding-top: 8px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}
+.aether-viz-export-btn {
+    background: rgba(0,0,0,0.35); border: 1px solid #334455; color: #8aaabb;
+    font-size: .62rem; font-family: var(--font-mono, monospace);
+    padding: 5px 10px; border-radius: 6px; cursor: pointer;
+    min-height: 32px; /* touch target */
+}
+.aether-viz-export-btn:hover { border-color: rgba(0,243,255,0.4); color: #00f3ff; }
+.aether-viz-export-folder { border-color: rgba(0,255,136,0.25); }
+html[data-aether-theme="ivory"] .aether-viz-container {
+    background: rgba(255,255,255,0.55); border-color: rgba(139,90,43,0.18);
+}
+html[data-aether-theme="ivory"] .aether-viz-export-btn {
+    background: rgba(245,241,235,0.9); border-color: rgba(139,90,43,0.3); color: #5c5346;
+}
+.aether-viz-table-wrap {
+    overflow-x: auto; border-radius: 8px; border: 1px solid #1e2535;
 }
 
 /* ═══════════════════════════════════════════════════════════

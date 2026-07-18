@@ -630,6 +630,23 @@
     soft.push({ name: 'ghost_module', pass: !!(g.AETHER_Ghost && g.AETHER_Ghost.accept), detail: '' });
     soft.push({ name: 'rag_indexFolder', pass: !!(g.AETHER_RAGv2 && g.AETHER_RAGv2.indexFolder), detail: '' });
     soft.push({ name: 'moat_module', pass: !!g.AETHER_Moat, detail: '' });
+    soft.push({
+      name: 'visualizer_v2',
+      pass: !!(g.AetherVisualizer && g.AetherVisualizer.runGoldenFixtures && g.AetherVisualizer.version),
+      detail: g.AetherVisualizer ? 'v' + g.AetherVisualizer.version : '',
+    });
+    if (g.AetherVisualizer && g.AetherVisualizer.runGoldenFixtures) {
+      try {
+        var vg = g.AetherVisualizer.runGoldenFixtures();
+        soft.push({
+          name: 'visualizer_goldens',
+          pass: !!(vg && vg.ok),
+          detail: vg ? vg.passed + '/' + vg.total : '',
+        });
+      } catch (eV) {
+        soft.push({ name: 'visualizer_goldens', pass: false, detail: eV.message || 'err' });
+      }
+    }
     var softPass = soft.filter(function (s) { return s.pass; }).length;
     sections.push({ name: 'modules', ok: softPass === soft.length, passed: softPass, total: soft.length, results: soft });
     if (softPass < soft.length) allOk = false;
