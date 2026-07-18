@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// AETHER Neural Interface v5.14
+// AETHER Neural Interface v5.18 — Aether Code
 // Copyright (C) 2026 The Architect
 //
 // This program is free software: you can redistribute it and/or modify
@@ -13,7 +13,8 @@
 // Competing with OpenClaw — open, local-first, no compromises.
 //
 // ── NOTE TO CONTRIBUTORS ───────────────────────────────────
-// Yes, this is one massive file. ~17,500 lines of vanilla JS.
+// Yes, this is one massive file. ~19,500 lines of vanilla JS.
+// Core modules now live in ./core/ (version, safe-math, capabilities, beast-mode).
 // No bundler, no framework, no build step. Just raw, uncut JavaScript.
 // We know it's not "best practice." Best practice doesn't run
 // entirely in a browser with zero backend and 22 AI providers.
@@ -21,6 +22,7 @@
 // better without adding a 500MB node_modules folder, PRs welcome.
 // Until then, enjoy the ride. The comments below will guide you
 // through the chaos. Or at least make you laugh while you're lost.
+// Version source of truth: core/version.js → window.AETHER_VERSION
 // ═══════════════════════════════════════════════════════════
 
 
@@ -269,6 +271,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         ragEnabled: true,
         streamingEnabled: true,
         blurInEnabled: true,           // Per-word blur-in typewriter effect
+        waveEnabled: true,             // AETHER pane neural wave visualizer
+        waveCalmIdle: true,            // Flat line when idle (recommended)
+        paneCompact: false,            // Hide metrics until streaming
 
         // SOUL & Reflection
         reflectionEnabled: true,        // Self-reflection engine on/off
@@ -279,6 +284,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Agent behavior
         agentMode: 'auto',              // 'auto' = detect & ask | 'ask' = always ask | 'off' = disabled
+        beastMode: false,               // v5.16 — max autonomy profile (see core/beast-mode.js)
 
         currentImageFile: null,
         extractedOCRText: null,
@@ -355,7 +361,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         vectorRagEnabled: false,
         pistonRuntimes: null,
         showMetrics: false,          // TTFT/TPS hidden by default; toggle in CFG
-        deepResearchSettings: { depth: 'standard', width: 'broad', criticality: 'important', maxPages: 4, format: 'report', sourceType: 'web+deep', language: 'auto', maxSources: 4, selfCritique: true, clarify: true },
+        deepResearchSettings: { depth: 'standard', width: 'broad', criticality: 'important', maxPages: 6, format: 'report', sourceType: 'web+deep', language: 'auto', maxSources: 6, selfCritique: true, clarify: true, useRag: true, useX: true, gapFill: true, includeCitations: true },
         groqReasoningEffort: 'default', // 'low' | 'default' | 'high'
         groqWebSearch: true,
         groqCodeExecution: true,
@@ -1009,6 +1015,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
         localStorage.setItem(HOOKS_KEY, JSON.stringify(cfg));
         hooksConfig = {...hooksConfig,...cfg};
+        // Mirror plain keys for Discovery skill host sync (same-origin only)
+        try {
+            localStorage.setItem('aether_hooks_plain', JSON.stringify({
+                tavily: cfg.tavily || '',
+                serper: cfg.serper || '',
+                brave: cfg.brave || '',
+                openweather: cfg.weather || '',
+            }));
+        } catch (e) {}
         // Save TTS config
         const ttsEng = ($('tts-engine')||{value:'none'}).value;
         const ttsPiper = ($('tts-piper-url')||{value:'http://localhost:5000/tts'}).value;
@@ -1019,6 +1034,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateTTSIndicator();
         showNotification('Hooks saved','success');
         updateServicesStatus();
+        try { if (typeof syncDiscoveryKeysFromHooks === 'function') syncDiscoveryKeysFromHooks(); } catch(e) {}
     }
 
     function updateServicesStatus() {
@@ -1497,7 +1513,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Register all FS tools ─────────────────────────────────
     function registerFSTools() {
         TOOL_REGISTRY['fs_read']      = { fn: async(p)   => await fsFolderRead(p),     desc: 'Read file from coding folder' };
-        TOOL_REGISTRY['fs_write']     = { fn: async(a)   => await fsFolderWrite(a),    desc: 'Write file. Format: path\ncontent' };
+        TOOL_REGISTRY['fs_write']     = { fn: async(a)   => await fsFolderWrite(a),    desc: 'Write full file. Format: path\\ncontent — prefer fs_patch for edits' };
+        TOOL_REGISTRY['fs_patch']     = { fn: async(a)   => await fsFolderPatch(a),    desc: 'Surgical edit. Formats: path|||old|||new  OR  path\\n<<<<<<< SEARCH\\nold\\n=======\\nnew\\n>>>>>>> REPLACE' };
+        TOOL_REGISTRY['search_replace']= { fn: async(a)  => await fsFolderPatch(a),    desc: 'Alias of fs_patch — surgical search/replace in a file' };
         TOOL_REGISTRY['fs_delete']    = { fn: async(p)   => await fsFolderDelete(p),   desc: 'Delete file or directory' };
         TOOL_REGISTRY['fs_list']      = { fn: async(p)   => await fsFolderShell('ls '+(p||'').trim()), desc: 'List files' };
         TOOL_REGISTRY['fs_rename']    = { fn: async(a)   => await fsFolderRename(a),   desc: 'Rename/move. Format: oldPath|newPath' };
@@ -1506,7 +1524,171 @@ document.addEventListener('DOMContentLoaded', async () => {
         TOOL_REGISTRY['fs_stat']      = { fn: async(p)   => await fsFolderStat(p),     desc: 'File metadata: size, type, modified' };
         TOOL_REGISTRY['fs_exists']    = { fn: async(p)   => await fsFolderExists(p),   desc: 'Check exists: returns true/false' };
         TOOL_REGISTRY['shell']        = { fn: async(cmd) => await fsFolderShell(cmd),  desc: 'Shell: ls, cat, grep, head, tail, wc, find, tree, pwd' };
+        try {
+            if (typeof AETHER_ToolRuntime !== 'undefined') AETHER_ToolRuntime.enrichRegistry(TOOL_REGISTRY);
+        } catch (_) {}
     }
+
+    /** CODE apply mode: ask (ghost) | auto (write now) | plan (ghost, never auto) */
+    function getCodeAcceptMode() {
+        try {
+            var el = document.getElementById('code-accept-mode');
+            if (el && el.value) return el.value;
+            return localStorage.getItem('aether_code_accept_mode') || 'ask';
+        } catch (_) { return 'ask'; }
+    }
+
+    function setCodeSessionStatus(status, hint) {
+        var st = document.getElementById('code-session-status');
+        if (st) {
+            st.dataset.status = status || 'idle';
+            st.textContent = status || 'idle';
+        }
+        if (hint != null) {
+            var h = document.getElementById('code-session-hint');
+            if (h) h.textContent = hint;
+        }
+    }
+
+    function pushCodeToolCard(name, phase, argPreview, resultPreview) {
+        var tl = document.getElementById('code-tool-timeline');
+        if (!tl || !state.codingMode) return null;
+        var empty = tl.querySelector('.code-tool-empty');
+        if (empty) empty.remove();
+        var card = document.createElement('div');
+        card.className = 'code-tool-card ' + (phase || 'running');
+        card.dataset.tool = name || '';
+        card.innerHTML =
+            '<div class="code-tool-card-top">' +
+            '<span class="code-tool-card-name">' + escapeHtml(name || 'tool') + '</span>' +
+            '<span class="code-tool-card-phase">' + escapeHtml(phase || 'running') + '</span>' +
+            '</div>' +
+            (argPreview ? '<div class="code-tool-card-arg">' + escapeHtml(String(argPreview).slice(0, 120)) + '</div>' : '') +
+            (resultPreview != null ? '<div class="code-tool-card-result">' + escapeHtml(String(resultPreview).slice(0, 240)) + '</div>' : '');
+        tl.insertBefore(card, tl.firstChild);
+        // Cap timeline length
+        while (tl.children.length > 40) tl.removeChild(tl.lastChild);
+        return card;
+    }
+
+    function finishCodeToolCard(card, phase, resultPreview) {
+        if (!card) return;
+        card.classList.remove('running', 'ok', 'err');
+        card.classList.add(phase === 'err' ? 'err' : 'ok');
+        var ph = card.querySelector('.code-tool-card-phase');
+        var text = resultPreview != null ? String(resultPreview) : '';
+        var msMatch = text.match(/\bms=(\d+)/);
+        var clsMatch = text.match(/\bclass=(\w+)/);
+        if (ph) {
+            ph.textContent = (phase || 'ok') + (msMatch ? ' ' + msMatch[1] + 'ms' : '');
+        }
+        if (clsMatch) card.dataset.cls = clsMatch[1];
+        if (resultPreview != null) {
+            var r = card.querySelector('.code-tool-card-result');
+            if (!r) {
+                r = document.createElement('div');
+                r.className = 'code-tool-card-result';
+                card.appendChild(r);
+            }
+            // Strip header line for compact body when envelope present
+            var body = text;
+            if (/^tool=/.test(text) || /^ok=/.test(text.split('\n')[0] || '')) {
+                var lines = text.split('\n');
+                body = lines.slice(1).join('\n') || text;
+            }
+            r.textContent = body.slice(0, 280);
+        }
+    }
+
+    /** Build a rich tool-result DOM node from envelope output */
+    function renderToolResultCard(name, result) {
+        const toolEl = document.createElement('div');
+        const text = String(result || '');
+        const ok = !(typeof AETHER_ToolRuntime !== 'undefined'
+            ? AETHER_ToolRuntime.isFailureString(text)
+            : /ok=false|error:|denied/i.test(text));
+        const msM = text.match(/\bms=(\d+)/);
+        const clsM = text.match(/\bclass=(\w+)/);
+        toolEl.className = 'aether-msg tool-result-msg code-tool-inline' + (ok ? ' tool-ok' : ' tool-err');
+        const hdr = document.createElement('div');
+        hdr.className = 'code-tool-inline-hdr';
+        const left = document.createElement('span');
+        left.textContent = '⚙ ' + name + (clsM ? ' · ' + clsM[1] : '');
+        const right = document.createElement('span');
+        right.textContent = (ok ? 'ok' : 'err') + (msM ? ' · ' + msM[1] + 'ms' : '');
+        right.style.color = ok ? '#50c080' : '#ff6688';
+        hdr.appendChild(left);
+        hdr.appendChild(right);
+        const body = document.createElement('div');
+        body.className = 'code-tool-inline-body';
+        let bodyText = text;
+        if (/^tool=/.test(text) || /^ok=/.test((text.split('\n')[0] || ''))) {
+            bodyText = text.split('\n').slice(1).join('\n') || text;
+        }
+        body.textContent = bodyText.slice(0, 4000);
+        toolEl.appendChild(hdr);
+        toolEl.appendChild(body);
+        return toolEl;
+    }
+
+    function syncCodeAgentShell() {
+        var on = !!state.codingMode;
+        var rail = document.getElementById('code-session-rail');
+        var right = document.getElementById('code-right-rail');
+        var treePanel = document.getElementById('coding-file-tree');
+        var termPanel = document.getElementById('coding-terminal');
+        if (rail) {
+            rail.style.display = on ? 'flex' : 'none';
+            rail.setAttribute('aria-hidden', on ? 'false' : 'true');
+        }
+        // Mobile CODE: panel visibility owned by AETHER_CodeMobile (tabbed UI)
+        var mobileCode = false;
+        try {
+            mobileCode = on && typeof AETHER_CodeMobile !== 'undefined' && AETHER_CodeMobile.isMobileCode && AETHER_CodeMobile.isMobileCode();
+        } catch (_) {}
+        if (!mobileCode) {
+            if (right) {
+                right.style.display = on ? 'flex' : 'none';
+                right.setAttribute('aria-hidden', on ? 'false' : 'true');
+            }
+            if (treePanel) {
+                treePanel.style.display = (on && codingFolderHandle) ? 'flex' : 'none';
+            }
+            if (termPanel) {
+                termPanel.style.display = (on && codingFolderHandle) ? 'flex' : 'none';
+            }
+            var chatEl = document.getElementById('chat-display');
+            if (chatEl) chatEl.style.display = '';
+        }
+        var folderEl = document.getElementById('code-session-folder');
+        if (folderEl) {
+            folderEl.textContent = codingFolderHandle
+                ? codingFolderHandle.name
+                : (on ? 'no folder — link one' : 'no folder');
+        }
+        // Dock ghost into CODE rail when coding; undock when off
+        try {
+            if (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.setHost) {
+                var ghostHost = document.getElementById('code-ghost-host');
+                AETHER_Ghost.setHost(on && ghostHost ? ghostHost : null);
+            }
+        } catch (e) {}
+        updateCodingTurnBadge(state.currentConversationId || '');
+        if (!on) setCodeSessionStatus('idle', 'Plan → Patch → Verify');
+        try {
+            if (typeof AETHER_CodePro !== 'undefined' && AETHER_CodePro.renderBar) AETHER_CodePro.renderBar();
+        } catch (_) {}
+        try {
+            if (typeof AETHER_CodeMobile !== 'undefined' && AETHER_CodeMobile.sync) AETHER_CodeMobile.sync();
+        } catch (_) {}
+    }
+    window.syncCodeAgentShell = syncCodeAgentShell;
+    window.openCodingFolder = openCodingFolder;
+
+    // Host bridges for Code Pro (ghost restore, verify terminal, status)
+    window.setCodeSessionStatus = setCodeSessionStatus;
+    window.fsFolderShell = typeof fsFolderShell === 'function' ? fsFolderShell : window.fsFolderShell;
+    // fsFolderRead / fsFolderWrite / __aetherForceWrite already exposed near FS tools
 
     function saveFolderName(name) { try { localStorage.setItem('aether_last_folder', name); } catch(_) {} }
     function getLastFolderName()  { return localStorage.getItem('aether_last_folder') || null; }
@@ -1587,6 +1769,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             return n ? 'Folder "'+n+'" disconnected (page reload). Click "Link Folder" to reconnect.' : 'No folder linked.';
         }
         try {
+            filePath = assertSafeFsPath(filePath, false);
             const parts = filePath.split('/').filter(Boolean);
             let dir = codingFolderHandle;
             for (const p of parts.slice(0,-1)) dir = await dir.getDirectoryHandle(p);
@@ -1595,11 +1778,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch(e) { return 'fs_read error: ' + e.message; }
     }
 
-    async function fsFolderWrite(arg) {
+    async function fsFolderWrite(arg, opts) {
+        opts = opts || {};
         if (!codingFolderHandle) return 'No folder linked.';
         const nl = arg.indexOf('\n'); if (nl === -1) return 'fs_write: format is path\ncontent';
-        const path = arg.slice(0, nl).trim(), text = arg.slice(nl+1);
+        let path = arg.slice(0, nl).trim(), text = arg.slice(nl+1);
         try {
+            path = assertSafeFsPath(path, true);
             const parts = path.split('/').filter(Boolean); let dir = codingFolderHandle;
             for (const p of parts.slice(0,-1)) dir = await dir.getDirectoryHandle(p, { create: true });
             const fh = await dir.getFileHandle(parts[parts.length-1], { create: true });
@@ -1607,15 +1792,30 @@ document.addEventListener('DOMContentLoaded', async () => {
             var oldContent = '';
             try {
                 var existing = await fh.getFile();
-                if (existing.size > 0 && existing.size < 50000) {
+                if (existing.size > 0 && existing.size < 500000) {
                     oldContent = await existing.text();
                 }
             } catch(e2) {}
+            // Ghost commits: in coding mode without Beast / auto, propose instead of write
+            try {
+                const beastOn = state.beastMode || (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled());
+                const acceptMode = getCodeAcceptMode();
+                const forceWrite = !!opts.force || acceptMode === 'auto' || beastOn;
+                if (state.codingMode && !forceWrite && typeof AETHER_Ghost !== 'undefined' && oldContent !== text) {
+                    AETHER_Ghost.propose({
+                        path: path,
+                        before: oldContent,
+                        after: text,
+                        message: 'fs_write proposal',
+                        source: 'fs_write',
+                        kind: 'write',
+                    });
+                    return 'ok=false ghost=true path=' + path + ' msg=Ghost commit proposed (not written) — Accept in Ghost rail or set apply=auto / BEAST';
+                }
+            } catch (gErr) {}
             await writeToFileHandle(fh, text);
-            var result = 'Written: ' + path + ' (' + text.length + ' chars)';
+            var result = 'ok=true path=' + path + ' bytes=' + text.length;
             if (oldContent && oldContent !== text) {
-                var oldLines = oldContent.split('\n').length;
-                var newLines = text.split('\n').length;
                 var adds = 0, dels = 0;
                 var oLines = oldContent.split('\n'), nLines = text.split('\n');
                 var oi = 0, ni = 0;
@@ -1624,15 +1824,158 @@ document.addEventListener('DOMContentLoaded', async () => {
                     else if (ni < nLines.length && (oi >= oLines.length || nLines[ni] !== oLines[oi])) { adds++; ni++; }
                     else if (oi < oLines.length) { dels++; oi++; }
                 }
-                result += ' (Diff: +' + adds + ' / -' + dels + ' lines)';
+                result += ' diff=+' + adds + '/-' + dels;
             }
+            if (typeof updateCodingFolderUI === 'function') try { updateCodingFolderUI(); } catch(_) {}
             return result;
-        } catch(e) { return 'fs_write error: ' + e.message; }
+        } catch(e) { return 'ok=false error=fs_write: ' + e.message; }
     }
+
+    // Force write used by Ghost Accept (skip re-ghosting)
+    window.__aetherForceWrite = async function(path, content) {
+        return fsFolderWrite(path + '\n' + content, { force: true });
+    };
+    window.fsFolderWrite = fsFolderWrite;
+    window.fsFolderRead = fsFolderRead;
+
+    /**
+     * Surgical patch — live insertions/subtractions.
+     * Accepted formats:
+     *   1) path|||old|||new
+     *   2) path\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE
+     *   3) path\nold\n<<<AETHER_SEP>>>\nnew
+     *   4) JSON {"path","old_string"|"old","new_string"|"new", replace_all?}
+     */
+    function parseFsPatchArg(arg) {
+        arg = String(arg || '').trim();
+        if (!arg) return { error: 'empty argument' };
+
+        // JSON object
+        if (arg.startsWith('{')) {
+            try {
+                var j = JSON.parse(arg);
+                var pathJ = j.path || j.file || j.filename;
+                var oldJ = j.old_string != null ? j.old_string : (j.old != null ? j.old : j.search);
+                var newJ = j.new_string != null ? j.new_string : (j.new != null ? j.new : j.replace);
+                if (!pathJ || oldJ == null || newJ == null) return { error: 'JSON needs path, old_string, new_string' };
+                return { path: String(pathJ).trim(), oldStr: String(oldJ), newStr: String(newJ), replaceAll: !!j.replace_all };
+            } catch (e) {
+                return { error: 'invalid JSON: ' + e.message };
+            }
+        }
+
+        // path|||old|||new  (bracket-friendly, no newlines required)
+        if (arg.includes('|||')) {
+            var parts = arg.split('|||');
+            if (parts.length < 3) return { error: 'format path|||old|||new needs 3 segments' };
+            return {
+                path: parts[0].trim(),
+                oldStr: parts.slice(1, -1).join('|||'),
+                newStr: parts[parts.length - 1],
+                replaceAll: false,
+            };
+        }
+
+        // SEARCH / REPLACE fence
+        var fence = arg.match(/^([^\n]+)\n<<<<<<<\s*SEARCH\n([\s\S]*?)\n=======\n([\s\S]*?)\n>>>>>>>\s*REPLACE\s*$/);
+        if (fence) {
+            return { path: fence[1].trim(), oldStr: fence[2], newStr: fence[3], replaceAll: false };
+        }
+
+        // path\nold\n<<<AETHER_SEP>>>\nnew
+        var sep = '\n<<<AETHER_SEP>>>\n';
+        var si = arg.indexOf(sep);
+        if (si !== -1) {
+            var head = arg.slice(0, si);
+            var nl = head.indexOf('\n');
+            if (nl === -1) return { error: 'AETHER_SEP format needs path\\nold\\n<<<AETHER_SEP>>>\\nnew' };
+            return {
+                path: head.slice(0, nl).trim(),
+                oldStr: head.slice(nl + 1),
+                newStr: arg.slice(si + sep.length),
+                replaceAll: false,
+            };
+        }
+
+        return {
+            error: 'Unrecognized fs_patch format. Use path|||old|||new or path\\n<<<<<<< SEARCH\\n...\\n=======\\n...\\n>>>>>>> REPLACE',
+        };
+    }
+
+    async function fsFolderPatch(arg) {
+        if (!codingFolderHandle) return 'ok=false error=No folder linked.';
+        var parsed = parseFsPatchArg(arg);
+        if (parsed.error) return 'ok=false error=fs_patch: ' + parsed.error;
+        var path = parsed.path;
+        var oldStr = parsed.oldStr;
+        var newStr = parsed.newStr;
+        if (!path) return 'ok=false error=fs_patch: missing path';
+        if (oldStr === newStr) return 'ok=false error=fs_patch: old_string and new_string are identical';
+
+        var before = await fsFolderRead(path);
+        if (typeof before === 'string' && before.startsWith('fs_read error')) {
+            return 'ok=false error=fs_patch: cannot read ' + path + ' — ' + before;
+        }
+        if (typeof before === 'string' && (before.startsWith('No folder') || before.startsWith('Folder "'))) {
+            return 'ok=false error=' + before;
+        }
+        before = String(before);
+
+        var idx = before.indexOf(oldStr);
+        if (idx === -1) {
+            // Helpful diagnostics: show nearby line if first line of old matches
+            var firstLine = oldStr.split('\n')[0].slice(0, 80);
+            var hint = firstLine && before.includes(firstLine)
+                ? ' (first line found but full block mismatched — re-read file)'
+                : ' (string not in file — re-read with fs_read)';
+            return 'ok=false error=old_string not found in ' + path + hint;
+        }
+        if (!parsed.replaceAll && before.indexOf(oldStr, idx + 1) !== -1) {
+            return 'ok=false error=old_string not unique in ' + path + ' — include more context or set replace_all';
+        }
+
+        var after;
+        if (parsed.replaceAll) {
+            after = before.split(oldStr).join(newStr);
+        } else {
+            after = before.slice(0, idx) + newStr + before.slice(idx + oldStr.length);
+        }
+
+        var stats = (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.diffStats)
+            ? AETHER_Ghost.diffStats(before, after)
+            : { adds: newStr.split('\n').length, dels: oldStr.split('\n').length };
+
+        var beastOn = state.beastMode || (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled && AETHER_Beast.isEnabled());
+        var acceptMode = getCodeAcceptMode();
+        var applyNow = beastOn || acceptMode === 'auto';
+
+        if (state.codingMode && !applyNow && typeof AETHER_Ghost !== 'undefined') {
+            AETHER_Ghost.propose({
+                path: path,
+                before: before,
+                after: after,
+                old_string: oldStr,
+                new_string: newStr,
+                message: 'fs_patch +' + stats.adds + '/-' + stats.dels,
+                source: 'fs_patch',
+                kind: 'patch',
+            });
+            setCodeSessionStatus('writing', 'ghost patch: ' + path);
+            return 'ok=true ghost=true path=' + path + ' diff=+' + stats.adds + '/-' + stats.dels +
+                ' msg=Patch proposed — Accept in Ghost rail (or apply=auto / BEAST)';
+        }
+
+        // Direct write
+        var writeRes = await fsFolderWrite(path + '\n' + after, { force: true });
+        setCodeSessionStatus('writing', 'patched ' + path);
+        return 'ok=true ghost=false path=' + path + ' diff=+' + stats.adds + '/-' + stats.dels + ' ' + writeRes;
+    }
+    window.fsFolderPatch = fsFolderPatch;
 
     async function fsFolderDelete(path) {
         if (!codingFolderHandle) return 'No folder linked.';
         try {
+            path = assertSafeFsPath(path, true);
             const parts = path.split('/').filter(Boolean); let dir = codingFolderHandle;
             for (const p of parts.slice(0,-1)) dir = await dir.getDirectoryHandle(p);
             await dir.removeEntry(parts[parts.length-1], { recursive: true });
@@ -1645,6 +1988,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function fsFolderMkdir(path) {
         if (!codingFolderHandle) return 'No folder linked.';
         try {
+            path = assertSafeFsPath(path, true);
             let dir = codingFolderHandle;
             for (const p of path.split('/').filter(Boolean)) dir = await dir.getDirectoryHandle(p, { create: true });
             return 'Created: ' + path;
@@ -1734,16 +2078,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Resolve a path string against the root handle ─────────
     async function fsResolveDir(pathStr) {
+        if (typeof AETHER_Security !== 'undefined' && AETHER_Security.safePath) {
+            const sp = AETHER_Security.safePath(pathStr || '');
+            if (!sp.ok) throw new Error('path blocked: ' + sp.error);
+            pathStr = sp.path;
+        }
         let dir = codingFolderHandle;
         const parts = (pathStr || '').split('/').filter(p => p && p !== '.');
         for (const p of parts) {
             if (p === '..') {
-                // FileSystem Access API doesn't support .. traversal — just stop
-                throw new Error('.. traversal not supported in browser FS');
+                throw new Error('.. traversal blocked');
             }
             dir = await dir.getDirectoryHandle(p);
         }
         return dir;
+    }
+
+    /** Guard FS path before read/write/delete */
+    function assertSafeFsPath(pathStr, forWrite) {
+        if (typeof AETHER_Security === 'undefined' || !AETHER_Security.safePath) return pathStr;
+        const sp = AETHER_Security.safePath(pathStr || '');
+        if (!sp.ok) throw new Error('path blocked: ' + sp.error);
+        if (forWrite && sp.sensitive) throw new Error('write to sensitive path blocked: ' + sp.path);
+        return sp.path;
     }
 
     // ── Recursively collect all entries for tree/find ─────────
@@ -1785,6 +2142,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             return last
                 ? `No folder linked. Last folder: "${last}". Click Link Folder to reconnect.`
                 : 'No folder linked. Click Link Folder to connect a project directory.';
+        }
+
+        // Security: allowlist + denylist before any FS work
+        if (typeof AETHER_Security !== 'undefined' && AETHER_Security.validateShellCommand) {
+            const vs = AETHER_Security.validateShellCommand(rawCmd);
+            if (!vs.ok) return 'ok=false error=shell security: ' + vs.error;
+            rawCmd = vs.command;
         }
 
         // Trim, collapse runs of whitespace
@@ -2390,22 +2754,20 @@ document.addEventListener('DOMContentLoaded', async () => {
             btn.textContent = codingFolderHandle ? ('📁 ' + codingFolderHandle.name) : '📂 Link Folder';
             btn.title = codingFolderHandle ? 'Linked: ' + codingFolderHandle.name : 'Give AETHER Code access to a project folder';
         }
-        // Terminal + tree panel sync
-        var treePanel = document.getElementById('coding-file-tree');
-        var termPanel = document.getElementById('coding-terminal');
+        var railBtn = document.getElementById('code-rail-link-folder');
+        if (railBtn) {
+            railBtn.textContent = codingFolderHandle ? ('📁 ' + codingFolderHandle.name) : '📁 Folder';
+        }
         if (codingFolderHandle) {
             renderFileTree();
-            if (termPanel) termPanel.style.display = (state.codingMode && codingFolderHandle) ? 'flex' : 'none';
             var cwd = document.getElementById('coding-terminal-cwd');
             if (cwd) cwd.textContent = '/' + codingFolderHandle.name;
             var inited = localStorage.getItem('aether_project_inited');
             if (!inited) {
                 showProjectInitWizard();
             }
-        } else {
-            if (treePanel) treePanel.style.display = 'none';
-            if (termPanel) termPanel.style.display = 'none';
         }
+        syncCodeAgentShell();
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -2761,6 +3123,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // CODE INTELLIGENCE (LSP-like)
     // ─────────────────────────────────────────────────────────────
     var _symbolIndex = [];
+    // Expose for AETHER_CodePro @symbol / @file mentions
+    try {
+        Object.defineProperty(window, '_symbolIndex', {
+            get: function () { return _symbolIndex; },
+            set: function (v) { _symbolIndex = v || []; },
+            configurable: true,
+        });
+    } catch (_) { window._symbolIndex = _symbolIndex; }
 
     async function indexWorkspaceSymbols() {
         if (!codingFolderHandle) return;
@@ -2879,6 +3249,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function toggleCodingMode() {
         state.codingMode = !state.codingMode;
+        if (state.codingMode && typeof window._aetherExpandModes === 'function') window._aetherExpandModes();
         const btn = document.getElementById('btn-coding-mode');
         if (btn) btn.classList.toggle('active', state.codingMode);
         document.body.classList.toggle('coding-mode', state.codingMode);
@@ -2903,15 +3274,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // Reset turn counter for current session when toggling
         if (state.currentConversationId) resetCodingTurns(state.currentConversationId);
-        // Switch sidebar to Code tab
+        // Switch sidebar to Code tab + enter terminal-agent shell
         if (state.codingMode) {
             var codeTab = document.querySelector('.sidebar-tab[data-tab="code"]');
             if (codeTab) codeTab.click();
-            // Index symbols
             if (codingFolderHandle) setTimeout(function() { indexWorkspaceSymbols(); }, 300);
+            // Ensure FS tools (incl. fs_patch) are registered even before folder link
+            try { registerFSTools(); } catch (_) {}
         }
         if (state.codingMode) {
-            // Project onboarding scan (mirrors ProjectOnboardingState)
             const onboarding = { hasReadme: false, hasTests: false, hasAetherMd: false, fileCount: 0 };
             if (state.workspaceEnabled) {
                 const files = Object.keys(wsFileCache);
@@ -2924,26 +3295,50 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (onboarding.hasAetherMd) notices.push('AETHER.md ✓');
             if (onboarding.hasTests)    notices.push('tests ✓');
             if (!onboarding.hasAetherMd && onboarding.fileCount > 0) notices.push('tip: add AETHER.md for project rules');
-            const poolInfo = 'Turn limit: ' + AETHER_TOOL_POOL.maxTurns + ' · Compact: ' + AETHER_TOOL_POOL.compactAfterTurns;
+            const poolInfo = 'Turn limit: ' + AETHER_TOOL_POOL.maxTurns + ' · fs_patch · Ghost';
             showNotification('⌨ AETHER Code — ' + (notices.join(' · ') || poolInfo), 'success');
+            setCodeSessionStatus('idle', codingFolderHandle ? 'Ready — Plan → Patch → Verify' : 'Link a folder to enable live FS');
         } else {
-            // Clear turn badge on deactivate
             const tb = document.getElementById('coding-turn-badge');
             if (tb) tb.style.display = 'none';
             showNotification('AETHER Code off', 'info');
         }
-        // Toggle file tree panel
-        var treePanel = document.getElementById('coding-file-tree');
-        if (treePanel) {
-            treePanel.style.display = (state.codingMode && codingFolderHandle) ? 'block' : 'none';
-        }
-        // Toggle terminal panel
-        var termPanel = document.getElementById('coding-terminal');
-        if (termPanel) {
-            termPanel.style.display = (state.codingMode && codingFolderHandle) ? 'flex' : 'none';
-        }
+        syncCodeAgentShell();
+        try {
+            if (typeof AETHER_CodePro !== 'undefined') {
+                AETHER_CodePro.installGhostHook && AETHER_CodePro.installGhostHook();
+                AETHER_CodePro.renderBar && AETHER_CodePro.renderBar();
+                AETHER_CodePro.wireMentions && AETHER_CodePro.wireMentions(document.getElementById('user-input'));
+            }
+        } catch (_) {}
         saveState();
     }
+
+    // Wire CODE rail controls once DOM is ready
+    (function initCodeAgentChrome() {
+        function bind() {
+            var linkBtn = document.getElementById('code-rail-link-folder');
+            if (linkBtn && !linkBtn._bound) {
+                linkBtn._bound = true;
+                linkBtn.onclick = function () { openCodingFolder(); };
+            }
+            var modeSel = document.getElementById('code-accept-mode');
+            if (modeSel && !modeSel._bound) {
+                modeSel._bound = true;
+                try {
+                    var saved = localStorage.getItem('aether_code_accept_mode');
+                    if (saved) modeSel.value = saved;
+                } catch (_) {}
+                modeSel.onchange = function () {
+                    try { localStorage.setItem('aether_code_accept_mode', modeSel.value); } catch (_) {}
+                    showNotification('CODE apply mode: ' + modeSel.value, 'info');
+                };
+            }
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+        else bind();
+        setTimeout(bind, 500);
+    })();
 
 
     // ═══════════════════════════════════════════════════════════
@@ -3258,7 +3653,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         consoleInp.addEventListener('keydown', async e => {
             if (e.key !== 'Enter' || !consoleInp.value.trim()) return;
             const expr = consoleInp.value; consoleInp.value = '';
-            try { const r = eval(expr); consoleOut.insertAdjacentHTML('beforeend', '<div class="cb-console-line cb-console-log"><span class="cb-console-ts">JS</span><span class="cb-console-text">' + escapeHtml(String(r)) + '</span></div>'); }
+            // Security: no eval — expression console disabled (use Piston Run for code)
+            try {
+                const r = (typeof AETHER_safeCalculate === 'function' && /^[\d\s+\-*/().,%^eE]+$/.test(expr))
+                    ? AETHER_safeCalculate(expr)
+                    : null;
+                if (r == null) throw new Error('eval disabled — use Run for code, or math-only expressions');
+                consoleOut.insertAdjacentHTML('beforeend', '<div class="cb-console-line cb-console-log"><span class="cb-console-ts">JS</span><span class="cb-console-text">' + escapeHtml(String(r)) + '</span></div>');
+            }
             catch(e) { consoleOut.insertAdjacentHTML('beforeend', '<div class="cb-console-line cb-console-error"><span class="cb-console-ts">ERR</span><span class="cb-console-text">' + escapeHtml(e.message) + '</span></div>'); }
             consoleOut.scrollTop = consoleOut.scrollHeight;
         });
@@ -4021,12 +4423,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         if(type==='prompt') setTimeout(()=>document.getElementById('aether-dlg-inp')?.focus(),80);
     }
 
-    // ─── DEEP RESEARCH MODE ──────────────────────────────────
-    const DEEP_RESEARCH_MODELS = ['deepseek-reasoner','deepseek-v3-2','deepseek-chat','gpt-oss-120b','qwen3.5-35b-a3b-instruct','qwen3.5-25b-instruct','qwen3.5-9b-instruct','qwen3.5-4b-instruct','qwen3-235b-a22b-instruct','qwen3-32b-instruct','qwen3-14b-instruct'];
+    // ─── DEEP RESEARCH MODE (v3 engine in core/aether-deep-research.js) ──
+    const DEEP_RESEARCH_MODELS = ['deepseek-reasoner','deepseek-v3-2','deepseek-chat','gpt-oss-120b','o1','o3','claude','gpt-4o','gpt-4.1','gemini','qwen3.5-35b-a3b-instruct','qwen3.5-25b-instruct','qwen3.5-9b-instruct','qwen3.5-4b-instruct','qwen3-235b-a22b-instruct','qwen3-32b-instruct','qwen3-14b-instruct'];
 
-    // ─── DEEP RESEARCH PIPELINE v2 ───────────────────────────
+    // ─── DEEP RESEARCH PIPELINE v3 ───────────────────────────
     let drPipelineActive = false;
     let drAbortCtrl = null;
+    let drLastLedger = null;
 
     function toggleDeepResearch() {
         if (drPipelineActive) {
@@ -4042,22 +4445,38 @@ document.addEventListener('DOMContentLoaded', async () => {
         const btn = document.getElementById('btn-deep-research');
         if (btn) btn.classList.toggle('active', state.deepResearch);
         if (state.deepResearch) {
+            if (typeof window._aetherExpandModes === 'function') window._aetherExpandModes();
             const cur = (apiConfig.model||'').toLowerCase();
             const good = DEEP_RESEARCH_MODELS.some(function(m){ return cur.includes(m.toLowerCase()); });
             const warn = !good
-                ? '<p style="background:rgba(255,165,0,.1);border:1px solid rgba(255,165,0,.3);color:#ffa500;padding:6px 10px;border-radius:4px;font-size:.68rem;margin-bottom:10px">⚠ Current model may not support deep reasoning. Recommended: DeepSeek, Qwen3.5, Claude, GPT-4o.</p>'
+                ? '<p style="background:rgba(255,165,0,.1);border:1px solid rgba(255,165,0,.3);color:#ffa500;padding:6px 10px;border-radius:4px;font-size:.68rem;margin-bottom:10px">⚠ Current model may not support deep reasoning. Recommended: DeepSeek, Qwen3.5, Claude, GPT-4o, Gemini.</p>'
                 : '';
-            const curSettings = state.deepResearchSettings || {};
+            const curSettings = (typeof AETHER_DeepResearch !== 'undefined' && AETHER_DeepResearch.mergeSettings)
+                ? AETHER_DeepResearch.mergeSettings(state.deepResearchSettings)
+                : (state.deepResearchSettings || {});
             const sel = function(id, val) { return val === curSettings[id] ? ' selected' : ''; };
-            const chk = function(id) { return curSettings[id] ? ' checked' : ''; };
-            const html = warn
-                + '<p style="color:#99a;margin-bottom:12px;font-size:.8rem">AETHER plans your research, lets you review, then executes autonomously.</p>'
+            const chk = function(id, def) {
+                var v = curSettings[id];
+                if (v === undefined) v = def;
+                return v ? ' checked' : '';
+            };
+            const caps = (typeof AETHER_DeepResearch !== 'undefined' && AETHER_DeepResearch.detectCapabilities)
+                ? AETHER_DeepResearch.detectCapabilities(hooksConfig)
+                : {};
+            const capLine = '<p style="color:#667;font-size:.68rem;margin-bottom:10px">v3 engines: '
+                + (caps.hasSearch ? '✓ Web' : '○ Web (add Tavily/Brave/Serper in HOOKS)')
+                + ' · ' + (caps.hasRag ? '✓ RAG' : '○ RAG')
+                + ' · ' + (caps.hasFirecrawl || caps.hasScrape ? '✓ Scrape' : '○ Scrape')
+                + ' · ' + (caps.hasX ? '✓ X' : '○ X')
+                + '</p>';
+            const html = warn + capLine
+                + '<p style="color:#99a;margin-bottom:12px;font-size:.8rem">Multi-angle search · RAG grounding · gap-fill · citations · self-critique. Review the plan, then run.</p>'
                 + '<div style="display:grid;gap:10px">'
                 + '<div><label style="color:#ccd;font-size:.75rem;display:block;margin-bottom:4px">⬡ DEPTH</label>'
                 + '<select id="dr-depth" style="width:100%;background:#111;color:#e0e0e0;border:1px solid #333;padding:6px 10px;border-radius:4px;font-family:inherit;font-size:.8rem">'
-                + '<option value="surface">Surface — Quick overview</option>'
+                + '<option value="surface"' + sel('depth','surface') + '>Surface — Quick overview</option>'
                 + '<option value="standard"' + sel('depth','standard') + '>Standard — Balanced depth</option>'
-                + '<option value="deep"' + sel('depth','deep') + '>Deep — Multi-angle analysis</option>'
+                + '<option value="deep"' + sel('depth','deep') + '>Deep — Multi-angle + gap-fill</option>'
                 + '<option value="exhaustive"' + sel('depth','exhaustive') + '>Exhaustive — Maximum depth (slow)</option>'
                 + '</select></div>'
                 + '<div><label style="color:#ccd;font-size:.75rem;display:block;margin-bottom:4px">↔ WIDTH</label>'
@@ -4077,7 +4496,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 + '<select id="dr-format" style="width:100%;background:#111;color:#e0e0e0;border:1px solid #333;padding:6px 10px;border-radius:4px;font-family:inherit;font-size:.8rem">'
                 + '<option value="report"' + sel('format','report') + '>📄 Research Report</option>'
                 + '<option value="memo"' + sel('format','memo') + '>📋 Executive Memo</option>'
-                + '<option value="bullets"' + sel('format','bullets') + '>🔵 Bullet-point Summary</option>'
+                + '<option value="brief"' + sel('format','brief') + '>🗂 Intelligence Brief</option>'
+                + '<option value="bullets"' + sel('format','bullets') + '>🔵 Bullet Summary</option>'
                 + '<option value="debate"' + sel('format','debate') + '>⚖️ Pro/Con Debate</option>'
                 + '<option value="tutorial"' + sel('format','tutorial') + '>📖 Tutorial Guide</option>'
                 + '</select></div>'
@@ -4098,357 +4518,589 @@ document.addEventListener('DOMContentLoaded', async () => {
                 + '<option value="web"' + sel('sourceType','web') + '>Web search results only</option>'
                 + '<option value="web+deep"' + sel('sourceType','web+deep') + '>Web + Deep-read top sources</option>'
                 + '</select></div>'
-                + '<div><label style="color:#ccd;font-size:.75rem;display:block;margin-bottom:4px">🔢 MAX SOURCES <span id="dr-source-val" style="color:var(--neon-cyan)">' + (curSettings.maxSources||4) + '</span></label>'
-                + '<input type="range" id="dr-max-sources" min="2" max="12" step="1" value="' + (curSettings.maxSources||4) + '" style="width:100%;accent-color:#00f3ff;height:4px" oninput="document.getElementById(\'dr-source-val\').textContent=this.value">'
+                + '<div><label style="color:#ccd;font-size:.75rem;display:block;margin-bottom:4px">🔢 MAX SOURCES / ANGLES <span id="dr-source-val" style="color:var(--neon-cyan)">' + (curSettings.maxSources||6) + '</span></label>'
+                + '<input type="range" id="dr-max-sources" min="2" max="12" step="1" value="' + (curSettings.maxSources||6) + '" style="width:100%;accent-color:#00f3ff;height:4px" oninput="document.getElementById(\'dr-source-val\').textContent=this.value">'
                 + '</div>'
                 + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
-                + '<input type="checkbox" id="dr-self-critique"' + chk('selfCritique') + ' style="accent-color:#00f3ff"> Self-critique & refine draft (better quality, 2× tokens)'
+                + '<input type="checkbox" id="dr-self-critique"' + chk('selfCritique', true) + ' style="accent-color:#00f3ff"> Self-critique & refine draft'
                 + '</label>'
                 + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
-                + '<input type="checkbox" id="dr-clarify"' + chk('clarify') + ' style="accent-color:#00f3ff"> Prompt for clarification on vague queries'
+                + '<input type="checkbox" id="dr-gap-fill"' + chk('gapFill', true) + ' style="accent-color:#00f3ff"> Gap-fill follow-up search (deep/exhaustive)'
+                + '</label>'
+                + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
+                + '<input type="checkbox" id="dr-use-rag"' + chk('useRag', true) + ' style="accent-color:#00f3ff"> Ground in RAG knowledge base when available'
+                + '</label>'
+                + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
+                + '<input type="checkbox" id="dr-use-x"' + chk('useX', true) + ' style="accent-color:#00f3ff"> Include current discourse (X) when available'
+                + '</label>'
+                + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
+                + '<input type="checkbox" id="dr-citations"' + chk('includeCitations', true) + ' style="accent-color:#00f3ff"> Append structured source ledger'
+                + '</label>'
+                + '<label style="display:flex;align-items:center;gap:8px;color:#ccd;font-size:.75rem;cursor:pointer">'
+                + '<input type="checkbox" id="dr-clarify"' + chk('clarify', true) + ' style="accent-color:#00f3ff"> Prompt for clarification on vague queries'
                 + '</label></div>';
             showAetherDialog({
-                title: '⚛ Deep Research Configuration',
+                title: '⚛ Deep Research v3',
                 html: html,
                 confirmLabel: '⚛ Activate', cancelLabel: 'Cancel',
                 onConfirm: function() {
-                    state.deepResearchSettings = {
+                    var s = {
                         depth:      (document.getElementById('dr-depth')      || {value:'standard'}).value,
                         width:      (document.getElementById('dr-width')      || {value:'broad'}).value,
                         criticality:(document.getElementById('dr-criticality')|| {value:'important'}).value,
                         format:     (document.getElementById('dr-format')     || {value:'report'}).value,
                         language:   (document.getElementById('dr-language')   || {value:'auto'}).value,
                         sourceType: (document.getElementById('dr-source-type')|| {value:'web+deep'}).value,
-                        maxSources: parseInt((document.getElementById('dr-max-sources')||{value:4}).value) || 4,
+                        maxSources: parseInt((document.getElementById('dr-max-sources')||{value:6}).value) || 6,
                         selfCritique: (document.getElementById('dr-self-critique')||{checked:true}).checked,
+                        gapFill:    (document.getElementById('dr-gap-fill')||{checked:true}).checked,
+                        useRag:     (document.getElementById('dr-use-rag')||{checked:true}).checked,
+                        useX:       (document.getElementById('dr-use-x')||{checked:true}).checked,
+                        includeCitations: (document.getElementById('dr-citations')||{checked:true}).checked,
                         clarify:    (document.getElementById('dr-clarify')    || {checked:true}).checked,
-                        maxPages: (function(){
-                            var d = (document.getElementById('dr-depth')||{value:'standard'}).value;
-                            var s = parseInt((document.getElementById('dr-max-sources')||{value:4}).value) || 4;
-                            return d === 'surface' ? Math.min(s, 2) : d === 'standard' ? s : d === 'deep' ? Math.min(s + 2, 12) : Math.min(s + 4, 16);
-                        })(),
                     };
+                    var d = s.depth;
+                    var n = s.maxSources;
+                    s.maxPages = d === 'surface' ? Math.min(n, 3) : d === 'standard' ? n : d === 'deep' ? Math.min(n + 2, 12) : Math.min(n + 4, 16);
+                    if (typeof AETHER_DeepResearch !== 'undefined' && AETHER_DeepResearch.mergeSettings) {
+                        state.deepResearchSettings = AETHER_DeepResearch.mergeSettings(s);
+                    } else {
+                        state.deepResearchSettings = s;
+                    }
                     saveState();
-                    showNotification('⚛ Deep Research ready — type your topic and send', 'success');
+                    // Soft-activate research skill for better chat follow-ups
+                    try {
+                        if (typeof activateSkill === 'function' && typeof isSkillActive === 'function' && !isSkillActive('research-analyst')) {
+                            activateSkill('research-analyst');
+                        }
+                    } catch (_) {}
+                    showNotification('⚛ Deep Research v3 ready — type your topic and send', 'success');
                 },
                 onCancel: function() { state.deepResearch = false; if (btn) btn.classList.remove('active'); },
             });
         } else { showNotification('Deep Research off', 'info'); saveState(); }
     }
 
-    // ─── DEEP RESEARCH PIPELINE RUNNER ──────────────────────
+    // ─── DEEP RESEARCH PIPELINE RUNNER v3 ───────────────────
     async function runDeepResearchPipeline(topic) {
         drPipelineActive = true;
         drAbortCtrl = new AbortController();
-        const dr = state.deepResearchSettings || {};
+        const DR = typeof AETHER_DeepResearch !== 'undefined' ? AETHER_DeepResearch : null;
+        const dr = DR ? DR.mergeSettings(state.deepResearchSettings) : (state.deepResearchSettings || {});
         const convId = state.currentConversationId;
+        const caps = DR ? DR.detectCapabilities(hooksConfig) : {
+            hasSearch: !!(hooksConfig.tavily || hooksConfig.brave || hooksConfig.serper),
+            hasFirecrawl: !!hooksConfig.firecrawlKey,
+            hasScrape: !!hooksConfig.firecrawlKey,
+            hasX: !!(hooksConfig.xBearer || TOOL_REGISTRY.x_search),
+            hasRag: !!(typeof AETHER_RAGv2 !== 'undefined' || (typeof RAG !== 'undefined' && RAG.totalDocs > 0)),
+        };
+        const ledger = DR ? DR.createLedger() : { sources: [], notes: [], ragHits: [], gaps: [], queries: [] };
+        drLastLedger = ledger;
 
-        // Phase 1: Generate plan
         const planCard = buildDRCard(topic, [], 'loading');
         display.appendChild(planCard);
         smoothScrollToBottom();
 
+        // Phase 1: Plan (model + default merge)
         let planSteps = [];
         try {
-            const hasScrape = dr.sourceType === 'web+deep' && !!hooksConfig.firecrawlKey;
-            const hasIterate = dr.selfCritique !== false;
-            const planTypes = [
-                '{"type":"search","label":"Search the Web","detail":"Gather initial information"}',
-                hasScrape ? '{"type":"scrape","label":"Deep-Read Top Sources","detail":"Extract detailed content from key pages"}' : '',
-                '{"type":"analyze","label":"Analyze Findings","detail":"Cross-reference and evaluate sources"}',
-                '{"type":"report","label":"Write Report","detail":"Create the final output"}',
-                hasIterate ? '{"type":"iterate","label":"Self-Critique & Refine","detail":"Review and improve the draft"}' : '',
-            ].filter(Boolean);
             const planTxt = await callModelDirect(
-                'You are a research planner. Topic: "' + topic + '"\n\n'
-                + 'Generate a research plan (3-6 steps). Respond ONLY with a JSON array like:\n'
-                + '[' + planTypes.join(',') + ']\n\n'
-                + 'Depth: ' + (dr.depth||'standard') + ' | Width: ' + (dr.width||'broad')
-                + ' | Format: ' + (dr.format||'report'),
-                { max_tokens: 600, temperature: 0.3 }
+                DR ? DR.planPrompt(topic, dr, caps)
+                   : 'Plan research as JSON array of steps for: ' + topic,
+                { max_tokens: 900, temperature: 0.25 }
             );
-            const m = planTxt.match(/\[[\s\S]*\]/);
-            if (m) planSteps = JSON.parse(m[0]);
-        } catch(e) { /* fallback */ }
+            planSteps = (DR && DR.parsePlanJson(planTxt)) || [];
+        } catch (e) { /* fallback */ }
+
         if (!planSteps.length) {
-            planSteps = [
-                { type:'search',  label:'Search the Web',              detail:'Search for information about: ' + topic },
-            ];
-            if (dr.sourceType === 'web+deep' && !!hooksConfig.firecrawlKey) {
-                planSteps.push({ type:'scrape',  label:'Deep-Read Top Sources',   detail:'Extract detailed content from key pages' });
-            }
-            planSteps.push(
-                { type:'analyze', label:'Analyze Findings',            detail:'Cross-reference and evaluate sources' },
-                { type:'report',  label:'Write Report',                detail:'Create the final output' }
-            );
-            if (dr.selfCritique !== false) {
-                planSteps.push({ type:'iterate', label:'Self-Critique & Refine', detail:'Review and improve the draft' });
+            planSteps = DR
+                ? DR.buildDefaultPlan(topic, dr, caps)
+                : [
+                    { type: 'search', label: 'Search', detail: topic },
+                    { type: 'analyze', label: 'Analyze', detail: '' },
+                    { type: 'report', label: 'Report', detail: '' },
+                ];
+        } else {
+            // Ensure search has angle queries
+            planSteps.forEach(function (s) {
+                if (s.type === 'search' && (!s.queries || !s.queries.length) && DR) {
+                    s.queries = DR.buildAngleQueries(topic, dr);
+                }
+            });
+            // Inject RAG/discourse if enabled but missing from model plan
+            if (dr.useRag && caps.hasRag && !planSteps.some(function (s) { return s.type === 'rag'; })) {
+                planSteps.unshift({ type: 'rag', label: 'Query Knowledge Base', detail: 'AETHER RAG v2 hybrid retrieval' });
             }
         }
 
-        // Phase 2: Show plan card for user review
-        buildDRCard(topic, planSteps, 'plan', planCard);
+        // Phase 2: Review plan
+        const est = DR ? DR.estimateMinutes(dr, planSteps.length) : 3;
+        buildDRCard(topic, planSteps, 'plan', planCard, { estimateMin: est, caps: caps });
 
-        const choice = await new Promise(function(resolve) {
-            var interval = setInterval(function() {
+        let choice = await new Promise(function (resolve) {
+            var interval = setInterval(function () {
                 var s = planCard.querySelector('#dr-start');
                 var e = planCard.querySelector('#dr-edit');
-                if (s && !s._wired) { s._wired = true; s.addEventListener('click', function(){ clearInterval(interval); resolve('start'); }); }
-                if (e && !e._wired) { e._wired = true; e.addEventListener('click', function(){ clearInterval(interval); resolve('edit'); }); }
+                var c = planCard.querySelector('#dr-cancel');
+                if (s && !s._wired) {
+                    s._wired = true;
+                    s.addEventListener('click', function () { clearInterval(interval); resolve('start'); });
+                }
+                if (e && !e._wired) {
+                    e._wired = true;
+                    e.addEventListener('click', function () { clearInterval(interval); resolve('edit'); });
+                }
+                if (c && !c._wired) {
+                    c._wired = true;
+                    c.addEventListener('click', function () { clearInterval(interval); resolve('cancel'); });
+                }
             }, 80);
-            drAbortCtrl.signal.addEventListener('abort', function(){ clearInterval(interval); resolve('cancel'); });
+            drAbortCtrl.signal.addEventListener('abort', function () {
+                clearInterval(interval);
+                resolve('cancel');
+            });
         });
 
-        if (choice === 'cancel') { drPipelineActive = false; return; }
+        if (choice === 'edit') {
+            var notes = window.prompt('Edit research focus / angles (optional notes for the plan):', topic) || '';
+            if (notes.trim() && notes.trim() !== topic) {
+                topic = notes.trim();
+                planSteps = DR ? DR.buildDefaultPlan(topic, dr, caps) : planSteps;
+                buildDRCard(topic, planSteps, 'plan', planCard, { estimateMin: est, caps: caps });
+                choice = await new Promise(function (resolve) {
+                    var interval = setInterval(function () {
+                        var s = planCard.querySelector('#dr-start');
+                        var c = planCard.querySelector('#dr-cancel');
+                        if (s && !s._wired2) {
+                            s._wired2 = true;
+                            s.addEventListener('click', function () { clearInterval(interval); resolve('start'); });
+                        }
+                        if (c && !c._wired2) {
+                            c._wired2 = true;
+                            c.addEventListener('click', function () { clearInterval(interval); resolve('cancel'); });
+                        }
+                    }, 80);
+                    drAbortCtrl.signal.addEventListener('abort', function () {
+                        clearInterval(interval);
+                        resolve('cancel');
+                    });
+                });
+            } else {
+                choice = 'start';
+            }
+        }
+
+        if (choice === 'cancel') {
+            drPipelineActive = false;
+            planCard.remove();
+            showNotification('Deep Research cancelled', 'info');
+            return;
+        }
 
         // Phase 3: Execute
-        buildDRCard(topic, planSteps, 'running', planCard);
+        buildDRCard(topic, planSteps, 'running', planCard, { estimateMin: est, caps: caps });
         const results = [];
         let collectedUrls = [];
-
-        const drDepth = dr.depth || 'standard';
-        const drFormat = dr.format || 'report';
-        const drLanguage = dr.language || 'auto';
-        const drSourceType = dr.sourceType || 'web+deep';
-        const drSelfCritique = dr.selfCritique !== false;
-
-        // Build a DR system prompt snippet for pipeline calls
+        let analysisText = '';
+        let reportText = '';
+        const maxTok = function () {
+            return getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit);
+        };
         function drSystemCtx() {
-            var langInstr = drLanguage !== 'auto' ? '\nWrite the response in ' + ({en:'English',es:'Spanish',fr:'French',de:'German',zh:'Chinese',ja:'Japanese',pt:'Portuguese'})[drLanguage] + '.' : '';
-            var formatInstr = ({
-                report: 'Format as a comprehensive research report with: Executive Summary, Key Findings, Details, and Conclusion.',
-                memo: 'Format as a concise executive memo with: Purpose, Summary, Key Points, Recommendations.',
-                bullets: 'Format as a bullet-point summary with: major points, supporting details, and key takeaways. Use concise fragments.',
-                debate: 'Format as a structured pro/con debate. Present both sides fairly with evidence for each position, then a synthesis.',
-                tutorial: 'Format as a tutorial/guide. Break into sections, include examples, and explain concepts step by step.'
-            })[drFormat] || 'Format as a well-structured research report.';
-            return langInstr + '\n' + formatInstr + '\nDepth: ' + drDepth + ' | Width: ' + (dr.width||'broad') + ' | Criticality: ' + (dr.criticality||'important');
+            return DR ? DR.systemContext(dr) : '';
+        }
+        function pushFinding(title, body) {
+            if (!body || body.length < 40) return;
+            try {
+                var el = document.createElement('div');
+                el.className = 'dr-finding-chip';
+                el.innerHTML = '<div class="dr-finding-title">' + title + '</div><div class="dr-finding-body"></div>';
+                el.querySelector('.dr-finding-body').textContent = String(body).slice(0, 280).replace(/\s+/g, ' ') + (body.length > 280 ? '…' : '');
+                var host = planCard.querySelector('.dr-findings') || (function () {
+                    var d = document.createElement('div');
+                    d.className = 'dr-findings';
+                    planCard.appendChild(d);
+                    return d;
+                })();
+                host.appendChild(el);
+            } catch (_) {}
+        }
+
+        async function runWebSearch(queries) {
+            var subQueries = (queries && queries.length)
+                ? queries.slice(0, dr.maxPages || 6)
+                : (DR ? DR.buildAngleQueries(topic, dr) : [topic]);
+            var stepResult = '';
+            if (hooksConfig.tavily || hooksConfig.brave || hooksConfig.serper) {
+                try {
+                    var searchResults = await parallelWebSearch(subQueries, Math.min(4, subQueries.length));
+                    var seenSnippets = new Set();
+                    var resultParts = [];
+                    for (var si = 0; si < searchResults.length; si++) {
+                        var r = searchResults[si];
+                        var trimmed = (r.result || '').slice(0, 900);
+                        if (!trimmed || seenSnippets.has(trimmed.slice(0, 80))) continue;
+                        seenSnippets.add(trimmed.slice(0, 80));
+                        resultParts.push('**Query:** ' + r.query + '\n\n' + trimmed);
+                        if (DR) DR.ingestSearchResult(ledger, r.query, r.result || '');
+                        else {
+                            var urlMatch = (r.result || '').match(/https?:\/\/[^\s)\]}"']+/g) || [];
+                            urlMatch.forEach(function (u) {
+                                u = u.replace(/[.,;:!?]+$/, '');
+                                if (collectedUrls.indexOf(u) === -1) collectedUrls.push(u);
+                            });
+                        }
+                    }
+                    stepResult = resultParts.join('\n\n---\n\n');
+                } catch (e2) { stepResult = ''; }
+            }
+            if (!stepResult) {
+                stepResult = await callModelDirect(
+                    drSystemCtx() + '\n\nResearch thoroughly (no live search available): "' + topic + '"\nAngles:\n- ' + subQueries.join('\n- '),
+                    { max_tokens: maxTok(), temperature: 0.4 }
+                );
+            }
+            // harvest urls from ledger
+            if (ledger.sources) {
+                ledger.sources.forEach(function (s) {
+                    if (s.url && collectedUrls.indexOf(s.url) === -1) collectedUrls.push(s.url);
+                });
+            }
+            return stepResult;
         }
 
         for (var i = 0; i < planSteps.length; i++) {
             if (drAbortCtrl.signal.aborted) break;
             var step = planSteps[i];
             drSetStepState(planCard, i, 'active');
-            drSetStatus(planCard, step.type === 'search' ? 'searching' : step.type === 'scrape' ? 'searching' : step.type === 'analyze' ? 'thinking' : step.type === 'iterate' ? 'thinking' : 'writing', step.label + '…');
+            var phaseHint = /search|scrape|rag|discourse|gapfill/.test(step.type) ? 'searching'
+                : /analyze|iterate/.test(step.type) ? 'thinking' : 'writing';
+            drSetStatus(planCard, phaseHint, step.label + '…');
             try {
                 var stepResult = '';
-                if (step.type === 'search') {
-                    var maxPages = dr.maxPages || (drDepth === 'surface' ? 2 : drDepth === 'standard' ? 4 : drDepth === 'deep' ? 6 : 10);
-                    var subQueries = [topic];
-                    if (step.detail) {
-                        subQueries.push(topic + ' ' + step.detail.split(' ').slice(0, 4).join(' '));
-                    }
-                    if (drDepth === 'standard' || drDepth === 'deep' || drDepth === 'exhaustive') {
-                        subQueries.push(topic + ' latest 2025 2026');
-                    }
-                    if (drDepth === 'deep' || drDepth === 'exhaustive') {
-                        subQueries.push(topic + ' research analysis');
-                        subQueries.push(topic + ' examples case studies');
-                    }
-                    if (drDepth === 'exhaustive') {
-                        subQueries.push(topic + ' limitations challenges critique');
-                        subQueries.push(topic + ' future trends');
-                    }
-                    subQueries = subQueries.slice(0, maxPages);
 
-                    if (hooksConfig.tavily || hooksConfig.brave || hooksConfig.serper) {
-                        try {
-                            var searchResults = await parallelWebSearch(subQueries, Math.min(4, maxPages));
-                            var seenSnippets = new Set();
-                            var resultParts = [];
-                            for (var si = 0; si < searchResults.length; si++) {
-                                var r = searchResults[si];
-                                var trimmed = (r.result || '').slice(0, 600);
-                                if (seenSnippets.has(trimmed.slice(0, 80))) continue;
-                                seenSnippets.add(trimmed.slice(0, 80));
-                                resultParts.push('**Query:** ' + r.query + '\n\n' + trimmed);
-                                // Extract URLs for deep-read
-                                var urlMatch = r.result ? r.result.match(/https?:\/\/[^\s)\]}"']+/g) : [];
-                                if (urlMatch) {
-                                    for (var ui = 0; ui < urlMatch.length; ui++) {
-                                        var u = urlMatch[ui].replace(/[.,;:!?]+$/, '');
-                                        if (u.length < 200 && collectedUrls.indexOf(u) === -1) collectedUrls.push(u);
-                                    }
-                                }
-                            }
-                            stepResult = resultParts.join('\n\n---\n\n');
-                        } catch(e2) { stepResult = ''; }
+                if (step.type === 'rag') {
+                    if (dr.useRag !== false && DR) {
+                        var hits = await DR.retrieveRag(topic, Math.min(8, dr.maxSources || 6));
+                        DR.ingestRagHits(ledger, hits);
+                        stepResult = DR.formatRagHits(hits) || 'No RAG hits (knowledge base empty or no match).';
+                        pushFinding('RAG', stepResult);
+                    } else {
+                        stepResult = 'RAG skipped.';
                     }
-                    if (!stepResult) {
-                        stepResult = await callModelDirect(
-                            drSystemCtx() + '\n\nResearch this topic thoroughly: "' + topic + '"\nFocus on: ' + step.detail + '\nDepth: ' + drDepth,
-                            { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.4 }
-                        );
+                } else if (step.type === 'search') {
+                    stepResult = await runWebSearch(step.queries);
+                    pushFinding('Web', stepResult);
+                } else if (step.type === 'discourse' || step.type === 'x') {
+                    if (dr.useX !== false && TOOL_REGISTRY.x_search) {
+                        try {
+                            stepResult = await callTool('x_search', topic);
+                            if (DR) DR.ingestSearchResult(ledger, topic + ' (discourse)', stepResult);
+                            pushFinding('Discourse', stepResult);
+                        } catch (ex) {
+                            stepResult = 'Discourse search unavailable: ' + (ex.message || ex);
+                        }
+                    } else if (dr.useX !== false && (hooksConfig.tavily || hooksConfig.brave || hooksConfig.serper)) {
+                        stepResult = await runWebSearch([topic + ' news opinion ' + (DR ? DR.yearTokens().y : new Date().getFullYear())]);
+                    } else {
+                        stepResult = 'Discourse sources unavailable.';
                     }
                 } else if (step.type === 'scrape') {
-                    // Deep-read top URLs collected from search results
-                    if (drSourceType === 'web+deep' && collectedUrls.length > 0 && hooksConfig.firecrawlKey) {
-                        var urlsToScrape = collectedUrls.slice(0, Math.min(3, dr.maxSources || 4));
+                    if (dr.sourceType === 'web+deep' && collectedUrls.length > 0 && hooksConfig.firecrawlKey) {
+                        var urlsToScrape = collectedUrls.slice(0, Math.min(4, dr.maxSources || 6));
                         var scraped = [];
                         for (var sci = 0; sci < urlsToScrape.length; sci++) {
                             if (drAbortCtrl.signal.aborted) break;
                             var url = urlsToScrape[sci];
-                            drSetStatus(planCard, 'searching', step.label + ' (' + url.slice(0, 50) + '…)');
+                            drSetStatus(planCard, 'searching', 'Deep-read ' + url.slice(0, 48) + '…');
                             try {
                                 var scrapedText = await firecrawlScrape(url);
-                                scraped.push('### Source: ' + url + '\n' + (scrapedText || '').slice(0, 2000));
-                            } catch {}
+                                scraped.push('### Source: ' + url + '\n' + (scrapedText || '').slice(0, 2200));
+                                if (DR) {
+                                    DR.addSource(ledger, {
+                                        url: url,
+                                        snippet: String(scrapedText || '').slice(0, 400),
+                                        kind: 'scrape',
+                                        tier: DR.scoreSourceTier(url, scrapedText),
+                                    });
+                                }
+                            } catch (_) {}
                         }
                         stepResult = scraped.length
                             ? '## Deep-Read Source Content\n\n' + scraped.join('\n\n---\n\n')
                             : 'No sources could be deep-read.';
+                        pushFinding('Deep-read', stepResult);
                     } else {
-                        // Fallback: model generates expanded knowledge
                         stepResult = await callModelDirect(
-                            drSystemCtx() + '\n\nExpand the research on "' + topic + '" with deeper analysis.\nFocus on: ' + (step.detail || 'detailed examination'),
-                            { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.4 }
+                            drSystemCtx() + '\n\nExpand research on "' + topic + '" with deeper technical/detail analysis.',
+                            { max_tokens: maxTok(), temperature: 0.4 }
                         );
                     }
                 } else if (step.type === 'analyze') {
-                    var ctx = results.map(function(r, j) {
-                        var cleaned = r.replace(/\*\*Query:\*\*[^\n]+\n/g, '').trim();
-                        return 'Source ' + (j + 1) + ':\n' + cleaned.slice(0, 900);
-                    }).join('\n\n');
+                    var ctx = results
+                        .filter(function (r) { return r && r.length > 40 && !String(r).startsWith('[Error'); })
+                        .map(function (r, j) {
+                            return '### Block ' + (j + 1) + '\n' + String(r).replace(/\*\*Query:\*\*[^\n]+\n/g, '').trim().slice(0, 1200);
+                        })
+                        .join('\n\n');
+                    var citeHint = DR ? DR.citationsMarkdown(ledger, 12) : '';
                     stepResult = await callModelDirect(
-                        drSystemCtx() + '\n\nAnalyze these research findings about "' + topic + '":\n\n' + ctx +
-                        '\n\nExtract: key facts, contradictions, knowledge gaps, confidence level.\n' +
-                        'Focus: ' + step.detail + '\nCriticality: ' + (dr.criticality || 'important'),
-                        { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.3 }
+                        DR
+                            ? DR.analyzePrompt(topic, ctx + (citeHint ? '\n\n' + citeHint : ''), dr)
+                            : drSystemCtx() + '\n\nAnalyze:\n' + ctx,
+                        { max_tokens: maxTok(), temperature: 0.25 }
                     );
+                    analysisText = stepResult;
+                    if (DR) {
+                        var parsedGaps = DR.parseGapsLine(stepResult);
+                        ledger.gaps = ledger.gaps.concat(parsedGaps);
+                    }
+                    pushFinding('Analysis', stepResult);
+                } else if (step.type === 'gapfill') {
+                    var gapQs = DR
+                        ? DR.gapQueriesFromAnalysis(analysisText || results.join('\n'), topic, dr.depth === 'exhaustive' ? 4 : 3)
+                        : [topic + ' open questions'];
+                    drSetStatus(planCard, 'searching', 'Gap-fill: ' + gapQs.length + ' queries…');
+                    stepResult = await runWebSearch(gapQs);
+                    // Re-analyze lightly
+                    if (stepResult && stepResult.length > 80) {
+                        var gapAnalysis = await callModelDirect(
+                            'Fill knowledge gaps for "' + topic + '".\nGaps targeted:\n- ' + gapQs.join('\n- ') +
+                            '\n\nNew evidence:\n' + stepResult.slice(0, 3500) +
+                            '\n\nWrite concise answers to each gap. Note residual unknowns.',
+                            { max_tokens: Math.min(maxTok(), 2500), temperature: 0.3 }
+                        );
+                        stepResult = '## Gap-Fill Results\n\n' + gapAnalysis + '\n\n### Raw evidence\n' + stepResult.slice(0, 1500);
+                        analysisText = (analysisText || '') + '\n\n' + gapAnalysis;
+                    }
+                    pushFinding('Gap-fill', stepResult);
                 } else if (step.type === 'iterate') {
-                    // Self-critique and refine the draft
-                    if (drSelfCritique) {
-                        var draftToReview = results[results.length - 1] || '';
-                        if (draftToReview.length > 100) {
-                            drSetStatus(planCard, 'thinking', 'Self-critiquing draft…');
-                            var critique = await callModelDirect(
-                                'You are a critical research reviewer. Review this draft research on "' + topic + '":\n\n' +
-                                draftToReview.slice(0, 4000) +
-                                '\n\nIdentify: 1) missing evidence 2) weak claims 3) structural improvements 4) factual errors. Be specific. Format as a bullet list.',
-                                { max_tokens: 800, temperature: 0.5 }
-                            );
-                            drSetStatus(planCard, 'writing', 'Refining report…');
-                            var refined = await callModelDirect(
-                                drSystemCtx() + '\n\nRevise and improve this draft based on the peer review:\n\n## Draft\n' +
-                                draftToReview.slice(0, 3000) + '\n\n## Peer Review\n' + critique +
-                                '\n\nProduce an improved version addressing all critique points. Incorporate the review feedback thoroughly.',
-                                { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.3 }
-                            );
-                            stepResult = refined.length > draftToReview.length * 0.5 ? refined : draftToReview;
-                        } else {
-                            stepResult = draftToReview;
-                        }
+                    var draftToReview = reportText || results[results.length - 1] || '';
+                    if (dr.selfCritique !== false && draftToReview.length > 100) {
+                        drSetStatus(planCard, 'thinking', 'Self-critiquing draft…');
+                        var critique = await callModelDirect(
+                            DR ? DR.critiquePrompt(topic, draftToReview)
+                               : 'Critique draft:\n' + draftToReview.slice(0, 4000),
+                            { max_tokens: 900, temperature: 0.45 }
+                        );
+                        drSetStatus(planCard, 'writing', 'Refining report…');
+                        var refined = await callModelDirect(
+                            DR ? DR.refinePrompt(topic, draftToReview, critique, dr)
+                               : 'Improve draft with critique:\n' + critique,
+                            { max_tokens: maxTok(), temperature: 0.28 }
+                        );
+                        stepResult = refined.length > draftToReview.length * 0.45 ? refined : draftToReview;
+                        reportText = stepResult;
                     } else {
-                        stepResult = 'Self-critique disabled.';
+                        stepResult = draftToReview || 'Self-critique disabled.';
                     }
                 } else {
-                    // Report or fallback step
-                    var analyzeResult = results.find(function(r) { return r && r.length > 100 && !r.startsWith('[Error'); }) || '';
-                    var allCtx = analyzeResult
-                        ? '## Research Analysis\n' + analyzeResult.slice(0, 2400)
-                        : results.map(function(r, j) { return '## Finding ' + (j + 1) + '\n' + r.slice(0, 1000); }).join('\n\n');
-                    var disc = (dr.criticality === 'critical') ? '\n\nAt the end add "## ⬡ Confidence Assessment" with a reliability score 1-10 and key caveats.' : '';
+                    // report / default compose
+                    var analysisBlock = analysisText || results.filter(function (r) {
+                        return r && r.length > 100 && !String(r).startsWith('[Error');
+                    }).slice(-1)[0] || '';
+                    var extras = results
+                        .filter(function (r) { return r && r !== analysisBlock && r.length > 150 && !String(r).startsWith('[Error'); })
+                        .map(function (r) { return String(r).slice(0, 1000); })
+                        .join('\n\n');
+                    var cites = (dr.includeCitations !== false && DR) ? DR.citationsMarkdown(ledger, 16) : '';
                     stepResult = await callModelDirect(
-                        drSystemCtx() + '\n\nWrite based on:\n' + allCtx +
-                        '\n\nTopic: "' + topic + '"\n' + disc,
-                        { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.3 }
+                        DR
+                            ? DR.reportPrompt(topic, analysisBlock, extras, dr, cites)
+                            : drSystemCtx() + '\n\nWrite report on ' + topic + ':\n' + analysisBlock,
+                        { max_tokens: maxTok(), temperature: 0.28 }
                     );
+                    reportText = stepResult;
                 }
+
                 results.push(stepResult);
                 drSetStepState(planCard, i, 'done');
-            } catch(e3) {
+            } catch (e3) {
                 drSetStepState(planCard, i, 'error');
-                results.push('[Error in step ' + (i+1) + ': ' + e3.message + ']');
+                results.push('[Error in step ' + (i + 1) + ': ' + (e3.message || e3) + ']');
             }
             var prog = planCard.querySelector('.dr-progress-fill');
-            if (prog) prog.style.width = Math.round(((i+1)/planSteps.length)*100) + '%';
+            if (prog) prog.style.width = Math.round(((i + 1) / planSteps.length) * 100) + '%';
+            // live source count
+            var srcEl = planCard.querySelector('.dr-source-count');
+            if (srcEl && ledger.sources) srcEl.textContent = ledger.sources.length + ' sources';
         }
 
-        // Phase 4: Combine all step outputs into a rich final report
+        // Phase 4: Final assembly
         if (!drAbortCtrl.signal.aborted) {
-            buildDRCard(topic, planSteps, 'done', planCard);
-            var finalReport = '';
-            if (results.length > 1) {
-                // Combine: find the most substantive step result as base
-                var bestResult = results.slice().sort(function(a, b) { return b.length - a.length; })[0] || '';
-                var supplement = results.filter(function(r) { return r !== bestResult && r.length > 200 && !r.startsWith('[Error'); });
-                if (supplement.length > 0) {
-                    var extractCtx = supplement.map(function(r, j) { return '## Supplementary Source ' + (j + 1) + '\n' + r.slice(0, 1200); }).join('\n\n');
-                    drSetStatus(planCard, 'writing', 'Synthesising final report…');
-                    finalReport = await callModelDirect(
-                        drSystemCtx() + '\n\nProduce the final output.\n\n## Primary Analysis\n' +
-                        bestResult.slice(0, 3000) + '\n\n## Additional Context\n' + extractCtx +
-                        '\n\nSynthesise everything into one coherent, well-structured piece covering all angles.',
-                        { max_tokens: getSmartMaxTokens(apiConfig.provider, apiConfig.model, state.contextLimit), temperature: 0.3 }
-                    );
-                } else {
-                    finalReport = bestResult;
-                }
-            } else {
-                finalReport = results[0] || results.join('\n\n---\n\n');
+            buildDRCard(topic, planSteps, 'done', planCard, { estimateMin: est, caps: caps, sourceCount: (ledger.sources || []).length });
+            var finalReport = reportText;
+            if (!finalReport || finalReport.length < 80) {
+                // pick best substantive result
+                finalReport = results
+                    .filter(function (r) { return r && !String(r).startsWith('[Error') && String(r).length > 80; })
+                    .sort(function (a, b) { return b.length - a.length; })[0] || results.join('\n\n---\n\n');
             }
-
+            // Append citations ledger if not already present
+            if (dr.includeCitations !== false && DR && ledger.sources && ledger.sources.length) {
+                var citeMd = DR.citationsMarkdown(ledger, 20);
+                if (citeMd && finalReport.indexOf('## Sources') === -1) {
+                    finalReport = finalReport.trim() + '\n\n---\n\n' + citeMd;
+                }
+            }
             if (!finalReport || finalReport.length < 50) finalReport = results.join('\n\n---\n\n');
 
             var reportEl = document.createElement('div');
             reportEl.className = 'aether-msg dr-report-msg';
+            var badge = document.createElement('div');
+            badge.className = 'dr-report-badge';
+            badge.textContent = '⚛ Deep Research v3 · ' + (dr.depth || 'standard') + ' · ' + (ledger.sources ? ledger.sources.length : 0) + ' sources';
+            reportEl.appendChild(badge);
             reportEl.appendChild(parseMarkdown(finalReport));
             attachActions(reportEl, finalReport);
+            // Export actions
+            var exportRow = document.createElement('div');
+            exportRow.className = 'dr-export-row';
+            exportRow.innerHTML =
+                '<button type="button" class="dr-export-btn" data-act="copy">Copy report</button>' +
+                '<button type="button" class="dr-export-btn" data-act="sources">Show sources</button>';
+            reportEl.appendChild(exportRow);
+            exportRow.querySelector('[data-act="copy"]').onclick = function () {
+                try {
+                    navigator.clipboard.writeText(finalReport);
+                    showNotification('Report copied', 'success');
+                } catch (_) {
+                    showNotification('Copy failed', 'warn');
+                }
+            };
+            exportRow.querySelector('[data-act="sources"]').onclick = function () {
+                var md = DR ? DR.citationsMarkdown(ledger, 30) : 'No ledger';
+                addSystemMessage(md || '_No sources collected_');
+            };
             display.appendChild(reportEl);
+
             var conv = state.conversations[convId];
             if (conv) {
-                conv.messages.push({ role:'user', content:'[Deep Research] ' + topic });
-                conv.messages.push({ role:'assistant', content: finalReport });
-                // Archive search + scrape results as context for follow-up questions
-                var archiveCtx = results.filter(function(r) { return r && r.length > 100; }).map(function(r, j) { return '[Research Source ' + (j + 1) + ']\n' + r.slice(0, 400); }).join('\n\n');
-                if (archiveCtx) conv.messages.push({ role:'user', content: '[Research Archive]\n' + archiveCtx });
-                updateConversationTitle(conv); saveConversations(); renderConversationList();
+                conv.messages.push({ role: 'user', content: '[Deep Research v3] ' + topic });
+                conv.messages.push({ role: 'assistant', content: finalReport });
+                var archiveCtx = results
+                    .filter(function (r) { return r && r.length > 100; })
+                    .map(function (r, j) { return '[Research Source ' + (j + 1) + ']\n' + String(r).slice(0, 500); })
+                    .join('\n\n');
+                if (archiveCtx) conv.messages.push({ role: 'user', content: '[Research Archive]\n' + archiveCtx.slice(0, 6000) });
+                if (ledger.sources && ledger.sources.length) {
+                    conv.messages.push({
+                        role: 'user',
+                        content: '[Research Ledger]\n' + (DR ? DR.citationsMarkdown(ledger, 15) : ''),
+                    });
+                }
+                updateConversationTitle(conv);
+                saveConversations();
+                renderConversationList();
             }
             if (state.workspaceEnabled) {
                 try {
-                    var arc = await readFile('ARCHIVES.md') || '# Research Archive\n';
-                    arc += '\n\n## [' + new Date().toLocaleString() + '] ' + topic + '\n' + finalReport.slice(0, 600) + '…\n---\n';
+                    var arc = (await readFile('ARCHIVES.md')) || '# Research Archive\n';
+                    arc += '\n\n## [' + new Date().toLocaleString() + '] ' + topic + '\n' + finalReport.slice(0, 800) + '…\n---\n';
                     await writeFile('ARCHIVES.md', arc);
-                } catch(e4) {}
+                } catch (e4) {}
             }
-            showNotification('⚛ Research complete', 'success');
+            try {
+                if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
+                    AETHER_Kernel.log('deep_research.done', topic.slice(0, 80), 'call', {
+                        sources: (ledger.sources || []).length,
+                        steps: planSteps.length,
+                    });
+                }
+            } catch (_) {}
+            try {
+                if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
+                    AETHER_Moat.record('research', {
+                        title: 'Deep Research complete',
+                        detail: topic.slice(0, 160),
+                        meta: {
+                            sources: (ledger.sources || []).length,
+                            steps: planSteps.length,
+                            depth: dr.depth,
+                            format: dr.format,
+                        },
+                    });
+                }
+            } catch (_) {}
+            // Ship layer: persist real report for Research → Code fusion
+            try {
+                if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.saveLastResearch) {
+                    AETHER_Ship.saveLastResearch({
+                        topic: topic,
+                        report: finalReport,
+                        sources: ledger.sources || [],
+                        depth: dr.depth,
+                        format: dr.format,
+                    });
+                }
+            } catch (_) {}
+            // Offer fusion chip on report
+            try {
+                var fuse = document.createElement('button');
+                fuse.type = 'button';
+                fuse.className = 'dr-export-btn dr-fuse-code';
+                fuse.textContent = '→ CODE (implement)';
+                fuse.onclick = function () {
+                    if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.handoffResearchToCode) {
+                        AETHER_Ship.handoffResearchToCode({
+                            topic: topic,
+                            report: finalReport,
+                            sources: ledger.sources || [],
+                        });
+                    } else if (typeof AETHER_Moat !== 'undefined') {
+                        AETHER_Moat.handoffResearchToCode({ topic: topic, summary: finalReport.slice(0, 4000) });
+                    }
+                };
+                exportRow.appendChild(fuse);
+            } catch (_) {}
+            showNotification('⚛ Research complete · ' + (ledger.sources || []).length + ' sources', 'success');
         }
 
         drPipelineActive = false;
         smoothScrollToBottom();
     }
+    window.runDeepResearchPipeline = runDeepResearchPipeline;
+    window._drLastLedger = function () { return drLastLedger; };
 
     // ── DR UI builders ────────────────────────────────────────
-    function buildDRCard(topic, steps, phase, existingCard) {
+    function buildDRCard(topic, steps, phase, existingCard, meta) {
+        meta = meta || {};
         var card = existingCard || document.createElement('div');
-        card.className = 'dr-plan-card';
+        card.className = 'dr-plan-card dr-v3';
 
         var spinnerHTML = (phase === 'loading') ? '<div class="dr-spinner"></div>' : '';
-        var titleText   = (phase === 'loading') ? 'Generating research plan…' : topic;
+        var titleText   = (phase === 'loading') ? 'Deep Research v3 — planning…' : topic;
+        var safeTitle = String(titleText || '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
 
         // Header
         var headerHTML = '<div class="dr-card-header">'
             + '<svg class="ic-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>'
-            + '<span class="dr-card-title">' + (titleText || '') + '</span>'
+            + '<span class="dr-card-title">' + safeTitle + '</span>'
+            + '<span class="dr-v3-pill">v3</span>'
             + spinnerHTML
             + '</div>';
 
         // Steps
         var stepsHTML = '<div class="dr-steps-list">';
         var iconMap = {
-            search:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="18" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>',
+            search:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+            rag:     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>',
             scrape:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 0 1 9-9"/></svg>',
+            discourse:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+            gapfill: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
             analyze: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/></svg>',
             report:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
             iterate: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
         };
         for (var si = 0; si < steps.length; si++) {
             var s = steps[si];
-            stepsHTML += '<div class="dr-step-item" id="dr-step-' + si + '">'
+            var qn = (s.queries && s.queries.length) ? ' · ' + s.queries.length + ' queries' : '';
+            stepsHTML += '<div class="dr-step-item" id="dr-step-' + si + '"' + (phase !== 'loading' ? ' data-state="todo"' : '') + '>'
                 + '<div class="dr-step-icon">' + (iconMap[s.type] || iconMap.search) + '</div>'
                 + '<div class="dr-step-body">'
-                + '<div class="dr-step-label">' + s.label + '</div>'
-                + (phase === 'plan' && s.detail ? '<div class="dr-step-detail">' + s.detail + '</div>' : '')
+                + '<div class="dr-step-label">' + (s.label || s.type) + '<span class="dr-step-type">' + (s.type || '') + qn + '</span></div>'
+                + (phase === 'plan' && s.detail ? '<div class="dr-step-detail">' + String(s.detail).replace(/</g,'&lt;') + '</div>' : '')
                 + '</div>'
                 + '<div class="dr-step-state"></div>'
                 + '</div>';
@@ -4456,31 +5108,50 @@ document.addEventListener('DOMContentLoaded', async () => {
         stepsHTML += '</div>';
 
         // Progress bar
-        var progressHTML = '<div class="dr-progress-track"><div class="dr-progress-fill" style="width:0%"></div></div>';
+        var progressHTML = '<div class="dr-progress-track"><div class="dr-progress-fill" style="width:' + (phase === 'done' ? '100%' : '0%') + '"></div></div>';
 
         // Footer
         var footerHTML = '<div class="dr-card-footer">';
         if (phase === 'plan') {
             footerHTML += '<div class="dr-time-est">'
                 + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
-                + ' Ready in a few minutes</div>'
+                + ' ~' + (meta.estimateMin || 3) + ' min · ' + steps.length + ' steps</div>'
                 + '<div class="dr-actions">'
-                + '<button class="dr-btn-edit" id="dr-edit">Edit plan</button>'
-                + '<button class="dr-btn-start" id="dr-start">Start research</button>'
+                + '<button class="dr-btn-edit" id="dr-cancel" type="button">Cancel</button>'
+                + '<button class="dr-btn-edit" id="dr-edit" type="button">Edit focus</button>'
+                + '<button class="dr-btn-start" id="dr-start" type="button">Start research</button>'
                 + '</div>';
         } else if (phase === 'running') {
             footerHTML += '<div class="dr-time-est dr-running"><div class="dr-spinner-sm"></div> Researching…'
-                + '<button class="dr-btn-stop" id="dr-stop" onclick="window._drStop&&window._drStop()">■ Stop</button>'
+                + ' <span class="dr-source-count">' + (meta.sourceCount || 0) + ' sources</span>'
+                + '<button class="dr-btn-stop" id="dr-stop" type="button">■ Stop</button>'
                 + '</div>';
-            window._drStop = function() { if (drAbortCtrl) drAbortCtrl.abort(); };
         } else if (phase === 'done') {
             footerHTML += '<div class="dr-time-est" style="color:var(--neon-green)">'
                 + '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>'
-                + ' Research complete</div>';
+                + ' Research complete'
+                + (meta.sourceCount != null ? ' · <span class="dr-source-count">' + meta.sourceCount + ' sources</span>' : '')
+                + '</div>';
+        } else if (phase === 'loading') {
+            footerHTML += '<div class="dr-time-est"><div class="dr-spinner-sm"></div> Building multi-angle plan…</div>';
         }
         footerHTML += '</div>';
 
+        // Preserve live findings if re-render mid-run
+        var oldFindings = card.querySelector('.dr-findings');
         card.innerHTML = headerHTML + stepsHTML + progressHTML + footerHTML;
+        if (oldFindings && phase === 'running') card.appendChild(oldFindings);
+        else if (phase === 'running' || phase === 'done') {
+            var findHost = document.createElement('div');
+            findHost.className = 'dr-findings';
+            card.appendChild(findHost);
+        }
+
+        if (phase === 'running') {
+            var stopBtn = card.querySelector('#dr-stop');
+            if (stopBtn) stopBtn.onclick = function () { if (drAbortCtrl) drAbortCtrl.abort(); };
+            window._drStop = function () { if (drAbortCtrl) drAbortCtrl.abort(); };
+        }
         return card;
     }
 
@@ -4994,7 +5665,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Tools are classified by permission tier and context requirement.
     const AETHER_TOOL_POOL = {
         // Builtin — always available, no keys needed
-        builtin: ['calculate', 'read_file'],
+        builtin: ['calculate', 'read_file', 'fs_read', 'fs_list', 'fs_stat', 'fs_exists', 'fs_patch', 'search_replace', 'shell'],
 
         // Workspace — requires workspace to be enabled
         workspace: ['read_file', 'write_file'],
@@ -5004,9 +5675,12 @@ document.addEventListener('DOMContentLoaded', async () => {
                       'github_create_issue', 'slack_post', 'notion_query',
                       'email_send', 'jira_search', 'hue_lights'],
 
-        // Destructive — require permission gate before executing in Coding Mode
-        destructive: ['write_file', 'puter_deploy', 'puter_terminal',
-                      'puter_write_file', 'email_send', 'slack_post'],
+        // Destructive — require permission gate (expanded + Security module)
+        destructive: (typeof AETHER_Security !== 'undefined' && AETHER_Security.DESTRUCTIVE_TOOLS)
+            ? AETHER_Security.DESTRUCTIVE_TOOLS.slice()
+            : ['write_file', 'fs_write', 'fs_delete', 'fs_patch', 'search_replace', 'fs_rename', 'fs_copy',
+               'puter_deploy', 'puter_terminal', 'puter_write_file', 'email_send', 'slack_post',
+               'github_commit', 'shell'],
 
         // Session budget tracking (mirrors QueryEngineConfig)
         maxTurns: 25,
@@ -5014,13 +5688,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         maxBudgetTokens: 200000,
     };
 
-    // Permission gate — shows a confirm card before destructive tools execute in coding mode
+    // Permission gate — shows a confirm card before destructive tools execute
     async function requestToolPermission(toolName, preview) {
         return new Promise((resolve) => {
-            if (!state.codingMode) { resolve(true); return; }
-            if (!AETHER_TOOL_POOL.destructive.includes(toolName)) { resolve(true); return; }
+            const isDest = (typeof AETHER_Security !== 'undefined' && AETHER_Security.isDestructive)
+                ? AETHER_Security.isDestructive(toolName)
+                : AETHER_TOOL_POOL.destructive.includes(toolName);
+            // Outside coding mode: still gate high-risk tools that leave the browser
+            const alwaysGate = /puter_terminal|puter_deploy|email_send|browser_agent|github_commit/.test(toolName);
+            if (!isDest && !alwaysGate) { resolve(true); return; }
+            if (!state.codingMode && !alwaysGate && !state.beastMode) {
+                // Non-coding, non-always-gate: allow (chat tools)
+                if (!/fs_|write_file|shell/.test(toolName)) { resolve(true); return; }
+            }
+            if (state.beastMode || (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled && AETHER_Beast.isEnabled())) {
+                // Beast still confirms alwaysGate cloud/exec tools
+                if (!alwaysGate) { resolve(true); return; }
+            }
 
-            const conv = getCurrentConversation();
+            const safePreview = (typeof AETHER_Security !== 'undefined' && AETHER_Security.redactSecrets)
+                ? AETHER_Security.redactSecrets(String(preview || '')).slice(0, 160)
+                : String(preview || '').slice(0, 160);
+            const safeName = (typeof escapeHtml === 'function' ? escapeHtml(toolName) : toolName);
+            const safePrev = (typeof escapeHtml === 'function' ? escapeHtml(safePreview) : safePreview);
+
             const permCard = document.createElement('div');
             permCard.className = 'aether-msg perm-gate-card';
             permCard.innerHTML =
@@ -5028,26 +5719,31 @@ document.addEventListener('DOMContentLoaded', async () => {
                 '<span class="perm-gate-icon">🔒</span>' +
                 '<span class="perm-gate-title">Permission Request</span>' +
                 '</div>' +
-                '<div class="perm-gate-tool"><code>' + toolName + '</code></div>' +
-                (preview ? '<div class="perm-gate-preview">' + String(preview).slice(0, 120) + '</div>' : '') +
+                '<div class="perm-gate-tool"><code>' + safeName + '</code></div>' +
+                (safePrev ? '<div class="perm-gate-preview">' + safePrev + '</div>' : '') +
                 '<div class="perm-gate-actions">' +
-                '<button class="perm-allow-btn">Allow</button>' +
-                '<button class="perm-deny-btn">Deny</button>' +
+                '<button type="button" class="perm-allow-btn">Allow once</button>' +
+                '<button type="button" class="perm-deny-btn">Deny</button>' +
                 '</div>';
 
             permCard.querySelector('.perm-allow-btn').onclick = () => {
                 permCard.style.opacity = '0.5';
                 permCard.querySelector('.perm-gate-actions').innerHTML = '<span style="color:#00f396;font-size:.72rem;">✓ Allowed</span>';
+                try { if (typeof AETHER_Security !== 'undefined') AETHER_Security.audit('allow', toolName); } catch (_) {}
                 resolve(true);
             };
             permCard.querySelector('.perm-deny-btn').onclick = () => {
                 permCard.style.opacity = '0.5';
                 permCard.querySelector('.perm-gate-actions').innerHTML = '<span style="color:#e06060;font-size:.72rem;">✗ Denied</span>';
+                try { if (typeof AETHER_Security !== 'undefined') AETHER_Security.audit('deny', toolName); } catch (_) {}
                 resolve(false);
             };
             if (typeof display !== 'undefined' && display) {
                 display.appendChild(permCard);
                 smoothScrollToBottom();
+            } else {
+                // No chat display — fail closed
+                resolve(false);
             }
         });
     }
@@ -5066,11 +5762,16 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateCodingTurnBadge(convId);
     }
     function updateCodingTurnBadge(convId) {
+        const t = getCodingTurns(convId || state.currentConversationId || '');
         const badge = document.getElementById('coding-turn-badge');
-        if (!badge) return;
-        const t = getCodingTurns(convId);
-        badge.textContent = t > 0 ? 'Turn ' + t + '/' + AETHER_TOOL_POOL.maxTurns : '';
-        badge.style.display = t > 0 ? 'inline' : 'none';
+        if (badge) {
+            badge.textContent = t > 0 ? 'Turn ' + t + '/' + AETHER_TOOL_POOL.maxTurns : '';
+            badge.style.display = t > 0 ? 'inline' : 'none';
+        }
+        const railTurns = document.getElementById('code-session-turns');
+        if (railTurns) {
+            railTurns.textContent = 'Turn ' + t + '/' + AETHER_TOOL_POOL.maxTurns;
+        }
     }
 
     // Transcript compaction — mirrors compact_messages_if_needed in QueryEnginePort
@@ -5132,7 +5833,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         grep_files:    {fn:async(arg)         => fsGrep(arg),                             desc:'Regex search in workspace files. Format: pattern|filename?'},
         // ── Agent messaging ──────────────────────────────────
         send_message:  {fn:async(arg)         => agentSendMessage(arg),                   desc:'Send message between agents. Format: agentId|message'},
-        calculate:     {fn:async(expr)        => { try{return String(eval(expr));}catch(e){return 'Error: '+e.message;} }, desc:'Evaluate math expression'},
+        calculate:     {fn:async(expr)        => { try{return (typeof AETHER_safeCalculate==='function'?AETHER_safeCalculate(expr):(typeof math!=='undefined'&&math.evaluate?String(math.evaluate(expr)):'Error: safe math unavailable'));}catch(e){return 'Error: '+e.message;} }, desc:'Evaluate math expression (no eval)'},
         browser_agent: {fn:async(task)        => await runBrowserAgent(task, browserAgentConfig?.engine||'browser-use')||'Task queued', desc:'Browser automation task'},
         email_send:    {fn:async(arg)         => await handleEmailTool(arg),          desc:'Send email. Format: to: addr | subject: text | body: text'},
         location_get:  {fn:async()            => getLocCtx?getLocCtx():'Location not set', desc:'Get user location context'},
@@ -5158,37 +5859,217 @@ document.addEventListener('DOMContentLoaded', async () => {
         trello_archive_card:{ fn:async(id)  => await trelloArchiveCard(id),            desc: 'Archive a Trello card: cardId' },
         day_plan:      {fn:async()             => getDayPlan().catch(function(e){ return 'Calendar unavailable: '+e.message; }), desc:'Get your schedule for today from Google Calendar'},
     };
+    // Expose for Kernel instrumentation + advanced bridge (outside closure consumers)
+    window.__AETHER_TOOL_REGISTRY = TOOL_REGISTRY;
+    window.TOOL_REGISTRY = TOOL_REGISTRY;
+    // Enrich registry with Tool Runtime catalog (class, schemas, timeouts)
+    try {
+        if (typeof AETHER_ToolRuntime !== 'undefined') AETHER_ToolRuntime.enrichRegistry(TOOL_REGISTRY);
+    } catch (_) {}
 
     async function callTool(name, args) {
-        const key = (name||'').toLowerCase().replace(/[^a-z_]/g,'');
+        const RT = typeof AETHER_ToolRuntime !== 'undefined' ? AETHER_ToolRuntime : null;
+        const SEC = typeof AETHER_Security !== 'undefined' ? AETHER_Security : null;
+        const key = RT ? RT.normalizeName(name) : String(name || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
         const tool = TOOL_REGISTRY[key];
-        if(!tool) return `Unknown tool "${name}". Available: ${Object.keys(TOOL_REGISTRY).join(', ')}`;
-        // Permission gate: destructive tools require user confirmation in coding mode
-        if (state.codingMode && AETHER_TOOL_POOL.destructive.includes(key)) {
-            const preview = typeof args === 'string' ? args : (args.query || args.url || Object.values(args||{})[0] || '');
-            const allowed = await requestToolPermission(key, String(preview).slice(0, 100));
-            if (!allowed) return `[${name}] denied — user declined permission.`;
+        if (!tool) {
+            const avail = Object.keys(TOOL_REGISTRY).slice(0, 40).join(', ');
+            return RT
+                ? RT.formatResult(key || name, 'Unknown tool. Available: ' + avail, { ok: false, ms: 0 })
+                : `Unknown tool "${name}". Available: ${avail}`;
         }
-        try { return String(await tool.fn(...(Array.isArray(args)?args:Object.values(args)))); }
-        catch(e) { return `[${name}] error: ${e.message}`; }
+        // Tool pack gate (MCP-style packs)
+        if (typeof AETHER_ToolPacks !== 'undefined' && AETHER_ToolPacks.isToolAllowed && !AETHER_ToolPacks.isToolAllowed(key)) {
+            const msg = 'blocked — enable the tool pack that owns this tool (/packs).';
+            try { if (SEC) SEC.audit('pack_block', key); } catch (_) {}
+            return RT ? RT.formatResult(key, msg, { ok: false, ms: 0 }) : `[${name}] ${msg}`;
+        }
+
+        // Skill Runtime tool policy (prefer / strict)
+        if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.checkToolAllowed) {
+            try {
+                const skillGate = AETHER_SkillRuntime.checkToolAllowed(key, activeSkills);
+                if (skillGate && skillGate.ok === false) {
+                    try { if (SEC) SEC.audit('skill_policy_block', key); } catch (_) {}
+                    return RT
+                        ? RT.formatResult(key, skillGate.reason || 'blocked by skill policy', { ok: false, ms: 0 })
+                        : `[${name}] ${skillGate.reason || 'blocked by skill policy'}`;
+                }
+            } catch (_) {}
+        }
+
+        // Security preflight: paths, shell allowlist, SSRF, rate limit
+        if (SEC && SEC.preflightTool) {
+            const pf = SEC.preflightTool(key, args);
+            if (!pf.ok) {
+                try { SEC.audit('block', key + ': ' + pf.error); } catch (_) {}
+                return RT ? RT.formatResult(key, 'security: ' + pf.error, { ok: false, ms: 0 }) : `[${name}] security: ${pf.error}`;
+            }
+            if (pf.args !== undefined && (key === 'shell' || key === 'ws_shell')) args = pf.args;
+        }
+
+        const norm = RT
+            ? RT.normalizeArgs(key, args)
+            : { callArgs: typeof args === 'string' ? [args] : Object.values(args || {}), preview: String(args || '').slice(0, 200), meta: { class: 'call', timeout: 45000 } };
+        let preview = norm.preview || '';
+        if (SEC && SEC.redactSecrets) preview = SEC.redactSecrets(preview);
+        const meta = norm.meta || {};
+        const cls = meta.class || (RT ? RT.concurrencyClass(key) : 'call');
+
+        // Permission gate: destructive / always-gate tools
+        const beastOn = state.beastMode || (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled());
+        const needsPerm = (SEC && SEC.isDestructive)
+            ? SEC.isDestructive(key)
+            : AETHER_TOOL_POOL.destructive.includes(key);
+        if (needsPerm && !(beastOn && !/puter_terminal|puter_deploy|email_send|browser_agent|github_commit/.test(key))) {
+            const allowed = await requestToolPermission(key, String(preview).slice(0, 100));
+            if (!allowed) {
+                const msg = 'denied — user declined permission.';
+                return RT ? RT.formatResult(key, msg, { ok: false, ms: 0 }) : `[${name}] ${msg}`;
+            }
+        }
+
+        // Session status + flight cards
+        var phaseHint = 'thinking';
+        if (cls === 'read' || cls === 'net') phaseHint = 'reading';
+        else if (cls === 'write') phaseHint = 'writing';
+        else if (cls === 'exec') phaseHint = 'shell';
+        if (state.codingMode) setCodeSessionStatus(phaseHint, key + '…');
+        var card = state.codingMode ? pushCodeToolCard(key, 'running', preview) : null;
+        // Always show agent status bar for non-coding too
+        try { agentStatus(cls === 'net' ? 'search' : 'generic', '⚙ ' + key + '…'); } catch (_) {}
+
+        const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        try {
+            let resultPromise = tool.fn(...(norm.callArgs || []));
+            if (RT && RT.withTimeout) {
+                resultPromise = RT.withTimeout(resultPromise, meta.timeout || RT.DEFAULT_TIMEOUT, key);
+            }
+            const result = await resultPromise;
+            const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+            const out = RT
+                ? RT.formatResult(key, result, { ms: ms, maxResult: meta.maxResult })
+                : String(result);
+            const ok = RT ? !RT.isFailureString(out) : !/error|denied|ok=false/i.test(out);
+            finishCodeToolCard(card, ok ? 'ok' : 'err', out);
+            if (state.codingMode) setCodeSessionStatus(ok ? 'idle' : 'error', ok ? 'Plan → Patch → Verify' : key + ' failed');
+            try { agentDone(); } catch (_) {}
+            // Kernel + history
+            try {
+                if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
+                    AETHER_Kernel.log(key, preview.slice(0, 80), cls, { ok: ok, ms: ms });
+                }
+            } catch (_) {}
+            try {
+                if (RT && RT.pushHistory) {
+                    const prev = (SEC && SEC.redactSecrets) ? SEC.redactSecrets(preview) : preview;
+                    RT.pushHistory({ t: Date.now(), name: key, class: cls, ok: ok, ms: ms, preview: prev.slice(0, 120) });
+                }
+            } catch (_) {}
+            try {
+                if (typeof AETHER_CodeMobile !== 'undefined' && AETHER_CodeMobile.haptic) {
+                    AETHER_CodeMobile.haptic(ok ? 'light' : 'err');
+                }
+            } catch (_) {}
+            // Redact secrets in tool output before model/history sees them
+            if (SEC && SEC.redactSecrets) {
+                return SEC.redactSecrets(out);
+            }
+            return out;
+        } catch (e) {
+            const ms = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0);
+            let errMsg = e && e.message ? e.message : String(e);
+            if (SEC && SEC.redactSecrets) errMsg = SEC.redactSecrets(errMsg);
+            const out = RT
+                ? RT.formatResult(key, 'error: ' + errMsg, { ok: false, ms: ms })
+                : `[${name}] error: ${errMsg}`;
+            finishCodeToolCard(card, 'err', out);
+            if (state.codingMode) setCodeSessionStatus('error', errMsg.slice(0, 60));
+            try { agentDone(); } catch (_) {}
+            try {
+                if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
+                    AETHER_Kernel.log(key, errMsg.slice(0, 120), cls, { ok: false, ms: ms });
+                }
+            } catch (_) {}
+            try {
+                if (RT && RT.pushHistory) {
+                    RT.pushHistory({ t: Date.now(), name: key, class: cls, ok: false, ms: ms, preview: errMsg.slice(0, 120) });
+                }
+            } catch (_) {}
+            return out;
+        }
+    }
+
+    /** read = parallel-safe · write/exec = serial */
+    function toolConcurrencyClass(name) {
+        if (typeof AETHER_ToolRuntime !== 'undefined') return AETHER_ToolRuntime.concurrencyClass(name);
+        const key = String(name || '').toLowerCase().replace(/[^a-z_]/g, '');
+        if (/fs_write|fs_patch|search_replace|write_file|fs_delete|fs_mkdir|fs_rename|fs_copy|puter_write|puter_deploy|email_send|slack_post|notion_add|github_commit|cron_create|task_create|task_update/.test(key)) return 'write';
+        if (/shell|puter_terminal|browser_agent|exec|run|piston/.test(key)) return 'exec';
+        return 'read';
+    }
+
+    /**
+     * Run collected tool calls: reads in parallel, writes+exec serially.
+     * Preserves overall result order for context.
+     */
+    async function runToolCallsConcurrent(calls) {
+        if (!calls.length) return [];
+        // Cap concurrent tools per turn to avoid stampede
+        const MAX_TOOLS = state.codingMode ? 12 : 8;
+        const list = calls.slice(0, MAX_TOOLS);
+        const results = new Array(list.length);
+        const reads = [];
+        const serial = [];
+        list.forEach((c, i) => {
+            c._i = i;
+            const cls = toolConcurrencyClass(c.name);
+            if (cls === 'read') reads.push(c);
+            else serial.push(c);
+        });
+        if (state.codingMode && reads.length > 1) {
+            setCodeSessionStatus('reading', 'parallel ×' + reads.length);
+        }
+        // Parallel reads with small concurrency limit (max 4 at once)
+        const READ_CONCURRENCY = 4;
+        for (let i = 0; i < reads.length; i += READ_CONCURRENCY) {
+            const batch = reads.slice(i, i + READ_CONCURRENCY);
+            await Promise.all(batch.map(async (c) => {
+                results[c._i] = { name: c.name, result: await callTool(c.name, c.args) };
+            }));
+        }
+        for (const c of serial) {
+            results[c._i] = { name: c.name, result: await callTool(c.name, c.args) };
+        }
+        if (calls.length > MAX_TOOLS) {
+            results.push({
+                name: '_system',
+                result: 'ok=false note=tool budget — executed ' + MAX_TOOLS + '/' + calls.length + ' calls this turn',
+            });
+        }
+        return results;
     }
 
     async function parseAndExecuteTools(text) {
-        // NOTE: Only handles [[bracket]] and <tool_call> formats.
-        // <web_search> / <search> / <visit_website> XML are handled by the dedicated
-        // xmlToolRe block in handleStreamingResponse — do NOT duplicate them here.
-        const results = [];
-        let m;
-        // JSON code-fence tool calls
-        const blockRe = /```(?:tool_call|function_call|tool)\s*\n([\s\S]*?)```/gi;
-        while((m=blockRe.exec(text))!==null){try{const p=JSON.parse(m[1].trim());results.push({name:p.name||p.tool,result:await callTool(p.name||p.tool,p.arguments||p.args||{})});}catch{}}
-        // Standard <tool_call name="..."> XML (not web_search/search/visit_website)
-        const xmlRe = /<tool_call(?:\s+name="([^"]*)")?>([\s\S]*?)<\/tool_call>/gi;
-        while((m=xmlRe.exec(text))!==null){const nm=m[1]||'';let a={};try{a=JSON.parse(m[2].trim());}catch{a={query:m[2].trim()};}if(nm)results.push({name:nm,result:await callTool(nm,a)});}
-        // Short [[tool: arg]] bracket format — primary agent syntax
-        const shortRe=/\[\[(\w+):\s*"?([^"\]]+)"?\]\]/g;
-        while((m=shortRe.exec(text))!==null)results.push({name:m[1],result:await callTool(m[1],{query:m[2],location:m[2],url:m[2]})});
-        return results;
+        // <web_search> / <search> / <visit_website> handled in streaming path — skip here.
+        let pending = [];
+        if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.parseToolCallsFromText) {
+            pending = AETHER_ToolRuntime.parseToolCallsFromText(text).map((c) => ({
+                name: c.name,
+                args: c.args,
+            }));
+        } else {
+            // Fallback legacy parser
+            const multiRe = /\[\[(fs_write|fs_patch|search_replace|write_file):\s*([\s\S]*?)\]\]/gi;
+            let m;
+            while ((m = multiRe.exec(text)) !== null) pending.push({ name: m[1], args: m[2].trim() });
+            const shortRe = /\[\[(\w+):\s*"?([^"\]]+)"?\]\]/g;
+            while ((m = shortRe.exec(text)) !== null) {
+                if (/^(fs_write|fs_patch|search_replace|write_file)$/i.test(m[1])) continue;
+                pending.push({ name: m[1], args: m[2] });
+            }
+        }
+        return runToolCallsConcurrent(pending);
     }
 
     // Returns OpenAI-format tools. buildAnthropicTools() returns Anthropic format.
@@ -5229,6 +6110,23 @@ document.addEventListener('DOMContentLoaded', async () => {
             } : null,
         ].filter(Boolean);
         DEFS.forEach(d => t.push({type:'function',function:d}));
+
+        // Merge Tool Runtime schemas for CODE / always-on util tools (avoid dumping entire registry)
+        try {
+            if (typeof AETHER_ToolRuntime !== 'undefined' && AETHER_ToolRuntime.buildOpenAITools) {
+                const include = state.codingMode
+                    ? ['fs_read','fs_write','fs_patch','search_replace','fs_list','fs_stat','fs_exists','fs_mkdir','fs_rename','fs_copy','fs_delete','shell','calculate','read_file','glob','grep_files']
+                    : ['calculate','read_file','glob','grep_files'];
+                const extras = AETHER_ToolRuntime.buildOpenAITools(TOOL_REGISTRY, { include: include });
+                const have = new Set(t.map(x => x.function.name));
+                extras.forEach(function (ex) {
+                    if (!have.has(ex.function.name) && TOOL_REGISTRY[ex.function.name]) {
+                        t.push(ex);
+                        have.add(ex.function.name);
+                    }
+                });
+            }
+        } catch (_) {}
         return t;
     }
 
@@ -5242,15 +6140,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     async function dispatchToolCalls(toolCalls) {
-        const results=[];
-        for(const tc of (toolCalls||[])){
-            const nm=tc.function?.name; let args={};
-            try{args=JSON.parse(tc.function?.arguments||'{}');}catch{}
-            agentStatus('generic',`⚙ ${nm}…`);
-            results.push({tool_call_id:tc.id,role:'tool',name:nm,content:await callTool(nm,args)});
-            agentDone();
-        }
-        return results;
+        const list = (toolCalls || []).map((tc) => {
+            let args = {};
+            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+            return { name: tc.function?.name, args, id: tc.id };
+        });
+        if (!list.length) return [];
+        agentStatus('generic', '⚙ tools ×' + list.length + '…');
+        const ran = await runToolCallsConcurrent(list);
+        // Map back tool_call_id
+        const out = ran.map((r, i) => ({
+            tool_call_id: list[i] && list[i].id,
+            role: 'tool',
+            name: r.name,
+            content: r.result,
+        }));
+        agentDone();
+        return out;
     }
 
     // ─── WEB SCRAPING ────────────────────────────────────────
@@ -6033,10 +6939,15 @@ window.bgAddTask = () => showAetherDialog({
 
     async function runAgentTask(userGoal, options = {}) {
         if (agentRunning) { showNotification('Agent already running', 'warn'); return; }
+        if (typeof window._aetherExpandModes === 'function') window._aetherExpandModes();
         const cfg = { ...AGENT_DEFAULTS, ...options };
         agentRunning   = true;
         agentAbortCtrl = new AbortController();
         updateAgentIndicator(true);
+        // Kernel flight + thread graph
+        try { if (window.__aetherBeginAgentFlight) window.__aetherBeginAgentFlight(userGoal); } catch(e) {}
+        try { if (window.__aetherTrackGraph) window.__aetherTrackGraph('agent', 'Agent: ' + String(userGoal).slice(0, 48)); } catch(e) {}
+        try { if (typeof AETHER_Theater !== 'undefined') AETHER_Theater.pulseReasoning(); } catch(e) {}
 
         const agentConvId = state.currentConversationId;
         const conv = state.conversations[agentConvId];
@@ -6227,6 +7138,8 @@ window.bgAddTask = () => showAetherDialog({
                     updateConversationTitle(conv); saveConversations(); renderConversationList();
                     await clearAgentSession();
                     showNotification('Agent v3 task complete', 'success');
+                    try { if (window.__aetherEndAgentFlight) window.__aetherEndAgentFlight('landed'); } catch(e) {}
+                    try { if (typeof AETHER_Theater !== 'undefined') AETHER_Theater.answerPulse(); } catch(e) {}
                     break;
                 }
 
@@ -6284,11 +7197,13 @@ window.bgAddTask = () => showAetherDialog({
                 reportFeatureError('Agent', e);
             }
         } finally {
+            const aborted = !!(agentAbortCtrl && agentAbortCtrl.signal && agentAbortCtrl.signal.aborted);
             agentRunning = false;
             agentAbortCtrl = null;
             updateAgentIndicator(false);
             agentDone();
             agentEl.querySelector('.agent-stop-btn')?.remove();
+            try { if (window.__aetherEndAgentFlight) window.__aetherEndAgentFlight(aborted ? 'aborted' : 'landed'); } catch(e) {}
         }
     }
 
@@ -8714,14 +9629,22 @@ Deliver maximum value per token. Logic governs all output.
 
                 parsedIndex[fn] = { lines, tokens, summary: summaryLines.slice(0, 400) };
 
-                // Chunk into RAG (2000-char chunks with 200-char overlap)
-                const chunkSize = 2000;
-                const overlap   = 200;
-                for (let i = 0; i < content.length; i += chunkSize - overlap) {
-                    const chunk = content.slice(i, i + chunkSize);
-                    if (chunk.trim()) {
-                        RAG.addDocument(`[Project: ${proj.name}] [File: ${fn}]\n${chunk}`);
-                        ragChunks++;
+                // RAG v2 smart chunking (structure-aware) or legacy fallback
+                if (typeof AETHER_RAGv2 !== 'undefined') {
+                    const chunks = await AETHER_RAGv2.addFile(fn, content, {
+                        collection: 'project',
+                        meta: { project: proj.name },
+                    });
+                    ragChunks += (chunks && chunks.length) || 0;
+                } else {
+                    const chunkSize = 2000;
+                    const overlap   = 200;
+                    for (let i = 0; i < content.length; i += chunkSize - overlap) {
+                        const chunk = content.slice(i, i + chunkSize);
+                        if (chunk.trim()) {
+                            RAG.addDocument(`[Project: ${proj.name}] [File: ${fn}]\n${chunk}`);
+                            ragChunks++;
+                        }
                     }
                 }
                 parsedCount++;
@@ -8750,9 +9673,18 @@ Deliver maximum value per token. Logic governs all output.
         wsFileCache[summaryFn] = summaryLines;
 
         // Add summary to RAG as well
-        RAG.addDocument(`[Project Summary: ${proj.name}]\n${summaryLines.slice(0, 3000)}`);
-        RAG.save();
-        ragChunks++;
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            await AETHER_RAGv2.addText(summaryLines.slice(0, 8000), {
+                collection: 'project',
+                source: summaryFn,
+                meta: { project: proj.name, kind: 'summary' },
+            });
+            ragChunks++;
+        } else {
+            RAG.addDocument(`[Project Summary: ${proj.name}]\n${summaryLines.slice(0, 3000)}`);
+            RAG.save();
+            ragChunks++;
+        }
 
         proj.parsedFiles  = parsedCount;
         proj.ragDocs      = ragChunks;
@@ -9011,10 +9943,36 @@ Deliver maximum value per token. Logic governs all output.
         save() { try{localStorage.setItem('aether_rag_docs',JSON.stringify(this.docs));}catch{} }
         load() { try{const s=localStorage.getItem('aether_rag_docs');if(s)JSON.parse(s).forEach(d=>this.addDocument(d));}catch{} }
     }
-    const RAG = new BM25(); RAG.load();
+    // ─── RAG: prefer v2 hybrid engine, keep BM25 class for fallback ──
+    const RAG_LEGACY = new BM25();
+    try { RAG_LEGACY.load(); } catch (_) {}
+    // Drop-in facade: addDocument/search/save used across the app
+    const RAG = (typeof AETHER_RAGv2 !== 'undefined' && AETHER_RAGv2.legacyFacade)
+        ? AETHER_RAGv2.legacyFacade
+        : RAG_LEGACY;
+    // Ensure v2 is warm + migrated
+    if (typeof AETHER_RAGv2 !== 'undefined') {
+        AETHER_RAGv2.ready().catch(function () {});
+        // Proxy totalDocs for /version etc.
+        try {
+            Object.defineProperty(RAG, 'totalDocs', {
+                get: function () {
+                    try { return AETHER_RAGv2.stats().chunks; } catch (e) { return RAG_LEGACY.totalDocs || 0; }
+                },
+                configurable: true,
+            });
+        } catch (_) {}
+    }
+    window.RAG = RAG;
+    window.AETHER_RAG = RAG;
 
-    // ─── ORAMA VECTOR RAG ────────────────────────────────────
+    // ─── ORAMA VECTOR RAG (optional CDN) + v2 hash embeddings ─
     async function initOrama() {
+        // v2 always has hash-vector hybrid — Orama is optional upgrade path
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            state.vectorRagEnabled = true;
+            return { v2: true };
+        }
         if (state.oramaDb) return state.oramaDb;
         try {
             const {create,insert,search:os} = await import('https://cdn.jsdelivr.net/npm/@orama/orama@2.0.6/+esm');
@@ -9028,6 +9986,9 @@ Deliver maximum value per token. Logic governs all output.
     }
 
     function textToEmbedding(text) {
+        if (typeof AETHER_RAGv2 !== 'undefined' && AETHER_RAGv2.textToEmbedding) {
+            return AETHER_RAGv2.textToEmbedding(text);
+        }
         const vec = new Float32Array(384).fill(0);
         text.toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean).forEach(t=>{
             let h=0; for(let i=0;i<t.length;i++) h=(Math.imul(31,h)+t.charCodeAt(i))|0;
@@ -9037,9 +9998,13 @@ Deliver maximum value per token. Logic governs all output.
         return Array.from(vec).map(v=>v/norm);
     }
 
-    async function addToVectorRAG(text) {
+    async function addToVectorRAG(text, meta) {
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            await AETHER_RAGv2.addText(text, Object.assign({ collection: 'session', source: 'chat' }, meta || {}));
+            return;
+        }
         if (!state.vectorRagEnabled || !text) return;
-        const o = state.oramaDb || await initOrama(); if(!o) return;
+        const o = state.oramaDb || await initOrama(); if(!o || o.v2) return;
         try {
             const doc = {id:'doc_'+Date.now(),content:text.slice(0,2000),embedding:textToEmbedding(text)};
             await o.insert(o.db, doc);
@@ -9050,11 +10015,51 @@ Deliver maximum value per token. Logic governs all output.
     }
 
     async function searchVectorRAG(query, topK=3) {
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            const r = await AETHER_RAGv2.search(query, { topK: topK, hybrid: true });
+            return (r.hits || []).map(h => ({ text: h.text, score: h.score }));
+        }
         if(!state.oramaDb) return [];
         try {
             const r = await state.oramaDb.search(state.oramaDb.db,{mode:'vector',vector:{value:textToEmbedding(query),property:'embedding'},limit:topK});
             return r.hits.map(h=>({text:h.document.content,score:h.score}));
         } catch { return []; }
+    }
+
+    /** RAG v2 hybrid retrieve → prompt block + citations for UI */
+    async function retrieveRAGv2(query, opts) {
+        opts = opts || {};
+        if (typeof AETHER_RAGv2 === 'undefined') {
+            const hits = RAG.search(query, opts.topK || 4);
+            return {
+                hits: hits,
+                citations: hits.map((h, i) => ({ n: i + 1, source: 'memory', snippet: String(h.text).slice(0, 120), score: h.score })),
+                contextBlock: hits.length
+                    ? '# RAG CONTEXT\n' + hits.map((c, i) => (i + 1) + '. ' + String(c.text).slice(0, 400)).join('\n')
+                    : '',
+            };
+        }
+        return AETHER_RAGv2.search(query, {
+            topK: opts.topK || 6,
+            hybrid: opts.hybrid != null ? opts.hybrid : true,
+            collection: opts.collection || null,
+        });
+    }
+
+    function attachRagCitations(aetherMsgEl) {
+        if (!aetherMsgEl) return;
+        const last = window.__AETHER_LAST_RAG;
+        if (!last || !last.citations || !last.citations.length) return;
+        // Only attach if search is recent (< 2 min) and not already attached
+        if (Date.now() - (last.t || 0) > 120000) return;
+        if (aetherMsgEl.querySelector('.rag-citations')) return;
+        try {
+            if (typeof AETHER_RAGv2 !== 'undefined' && AETHER_RAGv2.renderCitationsHTML) {
+                const wrap = document.createElement('div');
+                wrap.innerHTML = AETHER_RAGv2.renderCitationsHTML(last.citations);
+                if (wrap.firstChild) aetherMsgEl.appendChild(wrap.firstChild);
+            }
+        } catch (_) {}
     }
 
     // ─── PISTON API — Code Execution Engine ──────────────────
@@ -10182,7 +11187,7 @@ ${tbl}
         }
         if (codingFolderHandle) {
             hooks.push('File System (' + codingFolderHandle.name + ')');
-            hookInstructions.push('FILE SYSTEM: Use [[shell: ls -la]], [[shell: cat path]], [[shell: grep -r pattern]], [[fs_read: path]], [[fs_write: path\\ncontent]], [[fs_mkdir: path]], [[fs_stat: path]], [[fs_rename: old|new]], [[fs_copy: src|dest]], [[fs_exists: path]], [[fs_delete: path]].');
+            hookInstructions.push('FILE SYSTEM: Prefer [[fs_patch: path|||old|||new]] for edits. Also: [[shell: ls -la]], [[fs_read: path]], [[fs_write: path\\ncontent]] (new/full rewrite only), [[fs_mkdir: path]], [[fs_stat: path]], [[fs_rename: old|new]], [[fs_copy: src|dest]], [[fs_exists: path]], [[fs_delete: path]].');
         }
 
         if (hooks.length) {
@@ -10299,14 +11304,28 @@ ${tbl}
                 + '- Use [[tool_name: argument]] for all tool calls\n'
                 + '- One tool per line, no nesting\n'
                 + '- Tool results appear in the next turn\'s context automatically\n'
-                + '- For shell commands, use: [[shell: ls -la]] or [[shell: cat filename]]\n\n'
+                + '- For shell commands, use: [[shell: ls -la]] or [[shell: cat filename]]\n'
+                + '- Prefer structured results: ok=true/false, path=, diff=+N/-M\n'
+                + '- Tool runtime returns envelopes: tool=name ok=true|false ms=N class=read|write|exec|net\n'
+                + '- Prefer native tool_calls JSON when available; else [[tool: arg]] (multi-line OK for fs_patch/fs_write)\n\n'
+                + '## SURGICAL EDITS (PREFERRED)\n'
+                + '- NEVER rewrite a whole file if you are changing <40% of it — use fs_patch\n'
+                + '- Always fs_read (or shell cat) BEFORE patching so old_string matches exactly\n'
+                + '- old_string must be unique in the file; include enough surrounding context\n'
+                + '- Preferred bracket form: [[fs_patch: path|||old text|||new text]]\n'
+                + '- Multi-line form:\n'
+                + '  [[fs_patch: path\\n<<<<<<< SEARCH\\nold lines\\n=======\\nnew lines\\n>>>>>>> REPLACE]]\n'
+                + '- fs_write is ONLY for creating new files or full rewrites (>40% change)\n'
+                + '- In ask mode, patches land as Ghost commits — user Accept/Reject in the Ghost rail\n\n'
                 + '## FILE SYSTEM ACCESS\n'
                 + '- [[read_file: filename]] — read from workspace (if workspace enabled)\n'
                 + '- [[write_file: filename\\ncontent]] — write to workspace (requires permission)\n'
                 + '- [[calculate: expression]] — math/eval without hallucination\n'
                 + (codingFolderHandle ? (
                     '- [[fs_read: path]] — read real file from ' + codingFolderHandle.name + '\n'
-                    + '- [[fs_write: path\\ncontent]] — write real file\n'
+                    + '- [[fs_patch: path|||old|||new]] — surgical insert/delete (PREFERRED)\n'
+                    + '- [[search_replace: ...]] — alias of fs_patch\n'
+                    + '- [[fs_write: path\\ncontent]] — full file write (new files / large rewrites only)\n'
                     + '- [[fs_delete: path]] — delete file\n'
                     + '- [[fs_list]] — list directory\n'
                     + '- [[shell: command]] — run shell commands (ls, cat, grep, find, tree, pwd, mkdir, touch, sort, uniq, diff, head, tail, wc)\n'
@@ -10321,17 +11340,43 @@ ${tbl}
                 + '- Security annotations: XSS \ud83d\udd12, injection \ud83d\udd12, auth \ud83d\udd12\n'
                 + '- Descriptive names; comment non-obvious logic\n'
                 + '- Never hallucinate API signatures — use [[read_file]] or [[fs_read]] first\n'
-                + aetherMdCtx + fsTreeCtx;
+                + '- After patches: verify with fs_read or shell grep/diff when unsure\n'
+                + '- User may @mention files/symbols (@src/app.js, @blast, @memory, @plan) — honor those pins\n'
+                + '- Prefer surgical fs_patch; Ghost rail is the human review surface\n'
+                + aetherMdCtx + fsTreeCtx
+                + (typeof AETHER_CodePro !== 'undefined' && AETHER_CodePro.memoryForPrompt
+                    ? AETHER_CodePro.memoryForPrompt() : '')
+                + (typeof AETHER_ToolPacks !== 'undefined' && AETHER_ToolPacks.promptForPrompt
+                    ? AETHER_ToolPacks.promptForPrompt() : '')
+                + (typeof AETHER_MCP !== 'undefined' && AETHER_MCP.promptSnippet
+                    ? AETHER_MCP.promptSnippet() : '')
+                + (typeof AETHER_GitLite !== 'undefined' && AETHER_GitLite.promptSnippet
+                    ? AETHER_GitLite.promptSnippet() : '')
+                + '\n## Multi-agent\n'
+                + '- Subagents: /sub explore|plan|edit|review <goal>\n'
+                + '- Swarm: /swarm <goal> [--parallel] [--edit] [--review]\n'
+                + '- Parallel explore: /pexplore <goal>\n'
+                + '- PR change sets: /pr · Git Lite: /git\n';
         }
 
-        // ── Deep Research Mode ───────────────────────────────
+        // ── Deep Research Mode (v3 — follow-up chat after pipeline) ──
+        // Moat self-awareness (brief)
+        if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.computeScore) {
+            try {
+                const ms = AETHER_Moat.computeScore();
+                prompt += `\n\n---\n## AETHER MOAT (product identity)\nYou are AETHER — browser-native zero-backend agent OS. Moat integrity **${ms.overall}/100 (${ms.grade})**. Distinctive stack: Ghost review, Skill Runtime, Deep Research v3, local RAG, Kernel flights, client security. Prefer surgical fs_patch + Ghost over silent rewrites. Prefer citable research over invented sources.\n`;
+            } catch (_) {}
+        }
+
         if (state.deepResearch) {
-            const dr = state.deepResearchSettings || {};
+            const dr = (typeof AETHER_DeepResearch !== 'undefined' && AETHER_DeepResearch.mergeSettings)
+                ? AETHER_DeepResearch.mergeSettings(state.deepResearchSettings)
+                : (state.deepResearchSettings || {});
             const depthMap = {
                 surface: 'Provide a concise overview covering the main points. Keep it brief.',
                 standard: 'Explore the topic thoroughly with multiple angles, key data, and supporting evidence.',
                 deep: 'Conduct multi-layered analysis. Break into sub-topics. Include edge cases, counterarguments, and nuanced perspectives.',
-                exhaustive: 'Maximum depth. Leave no stone unturned. Examine every sub-domain, historical context, current state, future implications, contradictions, and expert disagreements. This may produce a very long response — that is expected and desired.',
+                exhaustive: 'Maximum depth. Leave no stone unturned. Examine every sub-domain, historical context, current state, future implications, contradictions, and expert disagreements.',
             };
             const widthMap = {
                 focused: 'Stay narrowly scoped to the exact topic asked. Do not drift.',
@@ -10341,28 +11386,29 @@ ${tbl}
             const criticalityMap = {
                 casual: 'Aim for general accuracy.',
                 important: 'Cross-check key claims. Flag anything uncertain. Distinguish fact from inference.',
-                critical: 'Apply a full discriminator pass: after composing your answer, internally re-examine every major claim. Mark any that are uncertain, contested, or unverified. Include a "Confidence Assessment" section at the end rating overall reliability.',
+                critical: 'Full discriminator pass + Confidence Assessment (1–10) with caveats.',
             };
+            const ledgerNote = (typeof drLastLedger !== 'undefined' && drLastLedger && drLastLedger.sources && drLastLedger.sources.length)
+                ? `\n- **Prior run ledger:** ${drLastLedger.sources.length} sources available — prefer citing them as [n] when relevant.`
+                : '';
             prompt += `
-# DEEP RESEARCH MODE ACTIVE
-You are operating in Deep Research mode with the following parameters:
+# DEEP RESEARCH v3 MODE ACTIVE
+Multi-angle grounded research parameters:
 - **Depth:** ${dr.depth || 'standard'} — ${depthMap[dr.depth] || depthMap.standard}
 - **Width:** ${dr.width || 'broad'} — ${widthMap[dr.width] || widthMap.broad}
 - **Criticality:** ${dr.criticality || 'important'} — ${criticalityMap[dr.criticality] || criticalityMap.important}
-- **Format:** ${dr.format || 'report'}
-- **Language:** ${dr.language || 'auto'}
-- **Self-critique:** ${dr.selfCritique !== false ? 'enabled' : 'disabled'}
+- **Format:** ${dr.format || 'report'} · **Language:** ${dr.language || 'auto'}
+- **RAG grounding:** ${dr.useRag !== false ? 'on' : 'off'} · **Gap-fill:** ${dr.gapFill !== false ? 'on' : 'off'} · **Citations:** ${dr.includeCitations !== false ? 'on' : 'off'}
+- **Self-critique:** ${dr.selfCritique !== false ? 'enabled' : 'disabled'}${ledgerNote}
 
-## Research Protocol
-1. **Decompose** the query into sub-questions before answering
-2. **Synthesise** information from multiple angles
-3. **Structure** the output clearly: Executive Summary → Main Findings → Sub-topics → Conclusion
-4. **Flag uncertainty** clearly: use "(unverified)", "(disputed)", or "(estimate)" inline
-${dr.criticality === 'critical' ? '5. **Discriminator Pass** — after your full answer, add a "⬡ Confidence Assessment" section with a reliability score (1–10) and any caveats\n' : ''}
-5. **Source attribution** — cite sources inline where possible: [Source: URL or description]
-6. **Output format** — adapt to the selected format style (report, memo, bullets, debate, or tutorial)
-${dr.selfCritique !== false ? '7. **Self-review** — after drafting, critique your own output for gaps and errors before finalising\n' : ''}
-Do not rush. Precision and completeness outweigh speed in this mode.
+## Research Protocol (follow-up answers)
+1. Decompose into sub-questions; synthesise multi-angle evidence
+2. Structure: Executive Summary → Findings → Counterpoints → Sources → Conclusion
+3. Flag uncertainty: (unverified) | (disputed) | (estimate)
+4. Cite as [n] when Research Ledger / Archive is in context
+5. Prefer precision over length; surface residual unknowns explicitly
+${dr.criticality === 'critical' ? '6. End with ⬡ Confidence Assessment (1–10) + caveats\n' : ''}
+When the user sends a new research topic while DEEP is active, the **pipeline** runs (plan → search → analyze → report). For follow-up questions on the last report, answer from archive + ledger first.
 `;
         }
 
@@ -10415,6 +11461,13 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             if (skillsForPrompt.some(function(s){ return s.visualizer; })) {
                 prompt += '\n\n## VISUALIZER\nYou can output AETHER spec JSON for charts/diagrams. The renderer will detect and display them automatically.\nChart types: bar | line | area | bar-horizontal | stacked-bar | stacked-line | donut | pie | scatter | bubble | radar\nDiagram types: flow | struct | table | gantt | heatmap | timeline | svg | mermaid\nFlow layout: add "layout":"LR" for left-right, "layout":"RADIAL" for radial, default is top-bottom.\n';
             }
+            // Skill Runtime: tool policy + active playbook checklist
+            if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.buildRuntimePromptAddon) {
+                prompt += AETHER_SkillRuntime.buildRuntimePromptAddon(skillsForPrompt) || '';
+            }
+        } else if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.getRun && AETHER_SkillRuntime.getRun()) {
+            // Playbook running even if skills array empty mid-transition
+            prompt += AETHER_SkillRuntime.buildRuntimePromptAddon([]) || '';
         }
 
         // ── Active Project ─────────────────────────────────────
@@ -10449,13 +11502,27 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         // FS tools if folder linked
         if (typeof codingFolderHandle !== 'undefined' && codingFolderHandle) {
             prompt += `**File System**: Folder "${codingFolderHandle.name}" is linked. `
-                + 'Use [[fs_read: path]], [[fs_write: path\\ncontent]], [[fs_mkdir: path]], [[fs_rename: old|new]], [[fs_copy: src|dest]], [[fs_stat: path]], [[fs_exists: path]], [[shell: command]] (ls, cat, grep, find, tree, pwd, mkdir, touch, sort, uniq, diff, head, tail, wc, help).\n\n';
+                + 'Use [[fs_patch: path|||old|||new]] (preferred), [[fs_read: path]], [[fs_write: path\\ncontent]] (new/full rewrite), [[fs_mkdir: path]], [[fs_rename: old|new]], [[fs_copy: src|dest]], [[fs_stat: path]], [[fs_exists: path]], [[shell: command]] (ls, cat, grep, find, tree, pwd, mkdir, touch, sort, uniq, diff, head, tail, wc, help).\n\n';
         }
 
         // Tool count
         const toolCount = typeof TOOL_REGISTRY !== 'undefined' ? Object.keys(TOOL_REGISTRY).length : 0;
         if (toolCount > 0) {
             prompt += `**Tools available**: ${toolCount} registered tools including web search, file system, Trello, X/Twitter, GitHub, Jira, Slack, Notion, and more. Use [[tool_name: arg]] syntax.\n`;
+        }
+
+        // Beast Mode system prompt addon
+        if (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled()) {
+            prompt += AETHER_Beast.systemPromptAddon();
+        } else if (typeof window.getBeastPromptAddon === 'function') {
+            prompt += window.getBeastPromptAddon() || '';
+        }
+
+        // Soul OS runtime identity
+        if (typeof window.__aetherSoulPrompt === 'function') {
+            prompt += window.__aetherSoulPrompt() || '';
+        } else if (typeof AETHER_SoulOS !== 'undefined' && AETHER_SoulOS.systemPromptBlock) {
+            prompt += AETHER_SoulOS.systemPromptBlock();
         }
 
         return prompt.trim();
@@ -10928,8 +11995,11 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     const TOOL_LABELS = {
         web_search:'🔍 Searching', get_weather:'🌤 Weather', scrape:'🕷 Scraping',
         crawl:'🌐 Crawling', read_file:'📂 Reading file', write_file:'✏️ Writing file',
-        fs_read:'📂 Reading', fs_write:'✏️ Writing', fs_delete:'🗑 Deleting',
-        fs_list:'📁 Listing', calculate:'🔢 Calculating',
+        fs_read:'📂 Reading', fs_write:'✏️ Writing', fs_patch:'🩹 Patching',
+        search_replace:'🩹 Patching', fs_delete:'🗑 Deleting',
+        fs_list:'📁 Listing', fs_stat:'ℹ Stat', fs_exists:'? Exists',
+        fs_mkdir:'📁 Mkdir', fs_rename:'✏ Rename', fs_copy:'📋 Copy',
+        shell:'$ Shell', calculate:'🔢 Calculating',
         puter_terminal:'⚙️ Terminal', puter_deploy:'🚀 Deploying',
         puter_read_file:'📂 Puter read', puter_write_file:'✏️ Puter write',
         github_create_issue:'🐙 GitHub issue', github_commit:'🐙 Committing',
@@ -11286,17 +12356,18 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                     return sortAsc ? cmp : -cmp;
                 }) : rows;
 
-                let html = `<table style="width:100%;border-collapse:collapse;font-size:.78rem;font-family:var(--font-mono,monospace);">`;
+                // Theme-aware: classes instead of dark inline hex (Ivory was stuck light-black)
+                let html = `<table class="aether-data-table" style="width:100%;border-collapse:collapse;font-size:.78rem;font-family:var(--font-mono,monospace);">`;
                 if (headers.length) {
                     html += '<thead><tr>' + headers.map((h,i) => {
                         const active = sortCol === i;
                         const icon = active ? (sortAsc ? ' ↑' : ' ↓') : '';
-                        return `<th data-col="${i}" style="background:#0a1018;color:#7ab8f0;font-weight:600;padding:9px 12px;text-align:left;border-bottom:1px solid #1e2535;cursor:pointer;user-select:none;white-space:nowrap;">${escHtml(h)}${icon}</th>`;
+                        return `<th data-col="${i}" class="aether-data-th" style="font-weight:600;padding:9px 12px;text-align:left;cursor:pointer;user-select:none;white-space:nowrap;">${escHtml(h)}${icon}</th>`;
                     }).join('') + '</tr></thead>';
                 }
                 html += '<tbody>' + sorted.map((row, ri) =>
-                    `<tr style="background:${ri%2===0?'#060810':'#080e16'};">` +
-                    row.map(cell => `<td style="padding:8px 12px;color:#c8d8e8;border-bottom:1px solid #0d1520;white-space:nowrap;">${escHtml(cell)}</td>`).join('') +
+                    `<tr class="${ri % 2 === 0 ? 'row-even' : 'row-odd'}">` +
+                    row.map(cell => `<td style="padding:8px 12px;white-space:nowrap;">${escHtml(cell)}</td>`).join('') +
                     '</tr>'
                 ).join('') + '</tbody></table>';
                 wrap.innerHTML = html;
@@ -11309,8 +12380,6 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                         else { sortCol = col; sortAsc = true; }
                         buildTable();
                     };
-                    th.onmouseenter = () => th.style.background = '#0d1a28';
-                    th.onmouseleave = () => th.style.background = '#0a1018';
                 });
             }
             buildTable();
@@ -12419,8 +13488,13 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     }
     function clearDisplay() { display.innerHTML = ''; state.lastAssistantMessage = null; }
     function showWelcomeMessage() {
+        const ver = (typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.16');
+        const beast = (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled()) ? ' · <span style="color:#ff6600">BEAST MODE</span>' : '';
         const msg = document.createElement('div'); msg.className = 'aether-msg fade-in';
-        msg.innerHTML = `<p><strong>AETHER v5.14</strong> — Dual Context · Advanced Prompt Engine · Quota System</p><p>Mode: T=${state.temperature} · CoT:${state.coTEnabled?'ON':'OFF'} · RAG:${state.ragEnabled?'ON':'OFF'} · Stream:${state.streamingEnabled?'ON':'OFF'}</p><p>Use <strong>SETUP</strong> to configure API, <strong>WS</strong> for workspace memory, <strong>QUOTA</strong> to track costs.</p>`;
+        msg.innerHTML = `<p><strong>AETHER ${ver}</strong>${beast} — Personal agent OS · Dual Context · Workspace · Skills</p>
+<p><strong>Toolbar:</strong> always-on NEW · STOP · RETRY · CFG &nbsp;·&nbsp; <strong>MODES ▾</strong> for AGENT/CODE/DEEP/WS/BEAST &nbsp;·&nbsp; <strong>MORE ▾</strong> for advanced tools</p>
+<p>Mode: T=${state.temperature} · CoT:${state.coTEnabled?'ON':'OFF'} · RAG:${state.ragEnabled?'ON':'OFF'} · Stream:${state.streamingEnabled?'ON':'OFF'}</p>
+<p>Open <strong>MODES → SETUP</strong> for API/local, <strong>WS</strong> for project memory, <strong>BEAST</strong> for max autonomy.</p>`;
         display.appendChild(msg);
     }
     function addUserMessage(content, save=true) {
@@ -12431,6 +13505,9 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         }
     }
     async function addAssistantMessage(content, save=true) {
+        try {
+            if (typeof window.__aetherShipNoteAssistant === 'function') window.__aetherShipNoteAssistant(content);
+        } catch (_) {}
         const el = document.createElement('div'); el.className = 'aether-msg'; display.appendChild(el);
         const rendered = parseMarkdown(content); el.appendChild(rendered); attachActions(el,content);
         state.lastAssistantMessage = {content,element:el};
@@ -12472,27 +13549,78 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     }
 
     // ─── AETHER PANE CONTROLLER ──────────────────────────────
-    // Manages status text, ring arc animation, and ambient particles
+    // Theme-aware ring, Ivory-friendly copy, compact metrics, calm wave.
     const apStatusEl  = document.getElementById('ap-status-text');
     const apSubEl     = document.getElementById('ap-sub-text');
     const apRingArc   = document.getElementById('ap-ring-arc');
     const apRingIcon  = document.getElementById('ap-ring-icon');
     const apParticles = document.getElementById('ap-particles');
-    const apTpsEl     = document.getElementById('tps-display'); // reuse existing ID
+    const apPaneEl    = document.getElementById('aether-pane');
+    const apTpsEl     = document.getElementById('tps-display');
 
     const AP_RING_FULL = 113; // circumference of r=18 circle
     let apCurrentStatus = 'idle';
 
-    // Status messages cycle during different states
-    const AP_IDLE_MESSAGES = [
-        'AETHER READY', 'NEURAL INTERFACE v5.15', 'AWAITING INPUT',
+    function isIvoryTheme() {
+        return document.documentElement.getAttribute('data-aether-theme') === 'ivory'
+            || document.documentElement.classList.contains('theme-light');
+    }
+
+    // Cyberpunk vs human-readable status lines
+    const AP_IDLE_MESSAGES_NEURAL = [
+        'AETHER READY', 'NEURAL INTERFACE', 'BEAST MODE STANDBY', 'AWAITING INPUT',
         'SYSTEMS NOMINAL', 'ALL MODELS ONLINE', 'ZERO LATENCY MODE'
     ];
-    const AP_THINKING_MESSAGES = [
+    const AP_IDLE_MESSAGES_IVORY = [
+        'Ready', 'Listening', 'At rest', 'Waiting for you',
+        'All set', 'Standing by', 'Quiet mode'
+    ];
+    const AP_THINKING_NEURAL = [
         'REASONING\u2026', 'PROCESSING QUERY', 'SYNTHESIZING\u2026',
         'NEURAL NET ACTIVE', 'GENERATING\u2026', 'COMPUTING\u2026'
     ];
+    const AP_THINKING_IVORY = [
+        'Thinking\u2026', 'Working on it', 'Almost there',
+        'Considering\u2026', 'Writing\u2026', 'Gathering thoughts'
+    ];
+    function apIdleMessages() { return isIvoryTheme() ? AP_IDLE_MESSAGES_IVORY : AP_IDLE_MESSAGES_NEURAL; }
+    function apThinkingMessages() { return isIvoryTheme() ? AP_THINKING_IVORY : AP_THINKING_NEURAL; }
+    function apVersionSub() {
+        if (isIvoryTheme()) {
+            const v = (typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.18');
+            return 'Aether ' + v + ' · Warm Ivory';
+        }
+        return typeof AETHER_FULL_LABEL !== 'undefined' ? AETHER_FULL_LABEL : 'Aether Code';
+    }
+    function apCssColor(varName, fallback) {
+        try {
+            const v = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+            return v || fallback;
+        } catch (e) { return fallback; }
+    }
+    function apRingColor(type) {
+        const cyan = apCssColor('--neon-cyan', '#00f3ff');
+        const magenta = apCssColor('--neon-magenta', '#b8a0ff');
+        const green = apCssColor('--neon-green', '#00ff88');
+        const orange = apCssColor('--neon-orange', '#ffaa44');
+        const white = apCssColor('--neon-white', isIvoryTheme() ? '#2C2416' : '#ffffff');
+        const map = {
+            idle: cyan,
+            thinking: magenta,
+            streaming: white,
+            success: green,
+            error: '#ff6464',
+            warn: orange,
+        };
+        return map[type] || cyan;
+    }
+
     let apMsgIdx = 0;
+
+    function apSetPaneLive(live) {
+        if (!apPaneEl) return;
+        apPaneEl.classList.toggle('pane-live', !!live);
+    }
 
     function apSetStatus(type, text, sub) {
         apCurrentStatus = type;
@@ -12501,25 +13629,27 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         if (text) apStatusEl.textContent = text;
         if (sub && apSubEl) apSubEl.textContent = sub;
 
-        // Ring arc fill
+        // Ring arc fill — stroke from theme tokens
         if (apRingArc) {
             const fill = { idle: 0, thinking: 60, streaming: 90, success: 113, error: 30, warn: 50 };
             const offset = AP_RING_FULL - (fill[type] || 0);
             apRingArc.style.strokeDashoffset = offset;
-            const colors = { idle: 'rgba(0,243,255,0.3)', thinking: '#b8a0ff', streaming: '#ffffff', success: '#00ff88', error: '#ff6464', warn: '#ffaa44' };
-            apRingArc.style.stroke = colors[type] || colors.idle;
+            apRingArc.style.stroke = apRingColor(type);
+            if (type === 'idle') {
+                apRingArc.style.opacity = '0.45';
+            } else {
+                apRingArc.style.opacity = '1';
+            }
         }
-        // Icon state
         if (apRingIcon) {
             apRingIcon.className = 'ap-ring-icon' + (type === 'thinking' || type === 'streaming' ? ' thinking' : type === 'success' ? ' active' : '');
         }
-        // Particles — only show during inference
+        // Compact pane: show metrics only while live
+        apSetPaneLive(type === 'streaming' || type === 'thinking');
+
         if (apParticles) {
-            if (type === 'streaming' || type === 'thinking') {
-                apStartParticles();
-            } else {
-                apStopParticles();
-            }
+            if (type === 'streaming' || type === 'thinking') apStartParticles();
+            else apStopParticles();
         }
     }
 
@@ -12531,12 +13661,15 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             const dot = document.createElement('div');
             dot.className = 'ap-particle';
             const size = 2 + Math.random() * 3;
+            const col = apRingColor(apCurrentStatus === 'streaming' ? 'streaming' : 'thinking');
+            // parse hex-ish to rgba roughly, or use color directly
             dot.style.cssText = 'width:' + size + 'px;height:' + size + 'px;'
                 + 'left:' + (10 + Math.random() * 80) + '%;'
                 + 'bottom:0;'
                 + 'animation-duration:' + (1.5 + Math.random() * 2) + 's;'
                 + 'animation-delay:' + (Math.random() * 0.5) + 's;'
-                + 'background:rgba(' + (apCurrentStatus === 'streaming' ? '255,255,255' : '0,243,255') + ',0.5);';
+                + 'background:' + col + ';'
+                + 'opacity:0.55;';
             apParticles.appendChild(dot);
             setTimeout(() => dot.remove(), 3500);
         }, 180);
@@ -12546,42 +13679,67 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         if (apParticles) apParticles.innerHTML = '';
     }
 
-    // Idle message rotation
+    // Idle message rotation (theme-aware copy)
     setInterval(() => {
         if (apCurrentStatus === 'idle' && apStatusEl) {
-            apMsgIdx = (apMsgIdx + 1) % AP_IDLE_MESSAGES.length;
-            apStatusEl.textContent = AP_IDLE_MESSAGES[apMsgIdx];
-            if (apSubEl) apSubEl.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+            const msgs = apIdleMessages();
+            apMsgIdx = (apMsgIdx + 1) % msgs.length;
+            apStatusEl.textContent = msgs[apMsgIdx];
+            if (apSubEl) {
+                apSubEl.textContent = isIvoryTheme()
+                    ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : new Date().toLocaleTimeString('en-GB', { hour12: false });
+            }
         }
     }, 4000);
 
-    // Hook into processing state changes
     function apUpdateFromState() {
         const convId = state.currentConversationId;
         const processing = !!(convId && state.processingConversations[convId]);
         if (processing && apCurrentStatus !== 'streaming' && apCurrentStatus !== 'thinking') {
-            apSetStatus('thinking', AP_THINKING_MESSAGES[Math.floor(Math.random() * AP_THINKING_MESSAGES.length)], 'Processing\u2026');
+            const think = apThinkingMessages();
+            apSetStatus('thinking', think[Math.floor(Math.random() * think.length)], isIvoryTheme() ? 'Working…' : 'Processing…');
         } else if (!processing && (apCurrentStatus === 'streaming' || apCurrentStatus === 'thinking')) {
-            apSetStatus('success', 'RESPONSE COMPLETE', 'Ready');
-            setTimeout(() => { if (apCurrentStatus === 'success') apSetStatus('idle', AP_IDLE_MESSAGES[0], 'Neural Interface v5.15'); }, 3000);
+            apSetStatus('success', isIvoryTheme() ? 'Done' : 'RESPONSE COMPLETE', isIvoryTheme() ? 'Ready when you are' : 'Ready');
+            setTimeout(() => {
+                if (apCurrentStatus === 'success') {
+                    apSetStatus('idle', apIdleMessages()[0], apVersionSub());
+                }
+            }, 3000);
         }
     }
 
-    // Expose for streaming to call directly
-    // Expose for streaming to call directly
     window._apSetStreaming = (tps) => {
         const modelShort = (apiConfig.model||'').split('-').slice(0,2).join('-').slice(0,18);
-        const msg = tps > 100 ? 'ULTRA-FAST \u26a1 ' + Math.round(tps) + ' t/s'
-            : tps > 30 ? 'STREAMING \u00b7 ' + Math.round(tps) + ' t/s'
-            : 'GENERATING\u2026';
-        apSetStatus('streaming', msg, modelShort + ' \u00b7 active');
+        let msg, sub;
+        if (isIvoryTheme()) {
+            msg = tps > 100 ? 'Very fast · ' + Math.round(tps) + ' t/s'
+                : tps > 30 ? 'Streaming · ' + Math.round(tps) + ' t/s'
+                : 'Writing…';
+            sub = modelShort || 'in progress';
+        } else {
+            msg = tps > 100 ? 'ULTRA-FAST \u26a1 ' + Math.round(tps) + ' t/s'
+                : tps > 30 ? 'STREAMING \u00b7 ' + Math.round(tps) + ' t/s'
+                : 'GENERATING…';
+            sub = modelShort + ' · active';
+        }
+        apSetStatus('streaming', msg, sub);
         if (apTpsEl) { apTpsEl.textContent = Math.round(tps) + ' t/s'; apTpsEl.style.color = 'var(--neon-cyan)'; }
     };
-    window._apSetIdle = () => apSetStatus('idle', AP_IDLE_MESSAGES[apMsgIdx], 'Neural Interface v5.15');
-    window._apSetError = (msg) => { apSetStatus('error', 'ERROR', msg || 'Request failed'); setTimeout(_apSetIdle, 4000); };
+    window._apSetIdle = () => apSetStatus('idle', apIdleMessages()[apMsgIdx % apIdleMessages().length], apVersionSub());
+    window._apSetError = (msg) => {
+        apSetStatus('error', isIvoryTheme() ? 'Something went wrong' : 'ERROR', msg || (isIvoryTheme() ? 'Please try again' : 'Request failed'));
+        setTimeout(_apSetIdle, 4000);
+    };
+    // Re-apply copy when theme changes
+    window._apOnThemeChange = () => {
+        if (apCurrentStatus === 'idle') {
+            apSetStatus('idle', apIdleMessages()[0], apVersionSub());
+        }
+    };
 
     // Init
-    apSetStatus('idle', 'AETHER READY', 'Neural Interface v5.15');
+    apSetStatus('idle', apIdleMessages()[0], apVersionSub());
 
     // ─── AETHER WAVE — TPS-REACTIVE NEURAL VISUALIZER ────────
     // Wave is truly reactive: flat when idle, complexity/speed/color
@@ -12617,27 +13775,41 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         resize(); window.addEventListener('resize', resize);
 
         // Color interpolation: cyan(idle) → white(medium) → orange(fast) → red(ultra)
+        // Warm Ivory uses walnut → clay instead of neon cyan
         function tpsToColor(tps, alpha) {
+            const ivory = document.documentElement.getAttribute('data-aether-theme') === 'ivory';
             if (tps < 1) {
-                // Idle: neon cyan
+                if (ivory) return alpha < 1 ? 'rgba(139,90,43,' + alpha + ')' : '#8B5A2B';
                 return alpha < 1 ? 'rgba(0,243,255,' + alpha + ')' : '#00f3ff';
             } else if (tps < 20) {
-                // Slow-medium: cyan fading to white
                 const t = tps / 20;
+                if (ivory) {
+                    const r = Math.round(139 + t * (196 - 139));
+                    const g = Math.round(90 + t * (92 - 90));
+                    const b = Math.round(43 + t * (38 - 43));
+                    return alpha < 1 ? 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')' : 'rgb(' + r + ',' + g + ',' + b + ')';
+                }
                 const r = Math.round(0   + t * 255);
                 const g = Math.round(243 + t * 12);
                 const b = Math.round(255 + t * 0);
                 return alpha < 1 ? 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')' : 'rgb(' + r + ',' + g + ',' + b + ')';
             } else if (tps < 80) {
-                // Medium-fast: white to orange
                 const t = (tps - 20) / 60;
+                if (ivory) {
+                    const r = Math.round(196 + t * (200 - 196));
+                    const g = Math.round(92 - t * 40);
+                    const b = Math.round(38 - t * 20);
+                    return alpha < 1 ? 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')' : 'rgb(' + r + ',' + g + ',' + b + ')';
+                }
                 const r = 255;
                 const g = Math.round(255 - t * 155);
                 const b = Math.round(255 - t * 255);
                 return alpha < 1 ? 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')' : 'rgb(' + r + ',' + g + ',' + b + ')';
             } else {
-                // Ultra-fast (Groq): orange to red
                 const t = Math.min((tps - 80) / 120, 1);
+                if (ivory) {
+                    return alpha < 1 ? 'rgba(180,60,30,' + alpha + ')' : 'rgb(180,60,30)';
+                }
                 const r = 255;
                 const g = Math.round(100 - t * 100);
                 const b = 0;
@@ -12646,16 +13818,28 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         }
 
         (function animate() {
+            // Respect CFG → Appearance → Wave toggle (still rAF so resume is instant)
+            if (state.waveEnabled === false) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                requestAnimationFrame(animate);
+                return;
+            }
+
             const convId = state.currentConversationId;
             const isProcessing = !!(convId && state.processingConversations[convId]);
 
             // Determine target TPS
             const targetTPS = isProcessing ? _waveTPS : 0;
 
+            // Calm idle: flat line when not processing (CFG → Appearance)
+            const calmIdle = state.waveCalmIdle !== false;
+
             // Exponential smoothing — wave trails actual TPS gracefully
             smoothTPS   = smoothTPS   * (1 - SMOOTH) + targetTPS  * SMOOTH;
-            smoothAmp   = smoothAmp   * (1 - SMOOTH) + (isProcessing ? Math.min(6 + smoothTPS * 0.28, 28) : 4) * SMOOTH;
-            smoothSpeed = smoothSpeed * (1 - SMOOTH) + (isProcessing ? Math.max(0.04, Math.min(smoothTPS * 0.004, 0.55)) : 0.025) * SMOOTH;
+            const idleAmp = calmIdle ? 0.4 : 4;
+            const idleSpeed = calmIdle ? 0.008 : 0.025;
+            smoothAmp   = smoothAmp   * (1 - SMOOTH) + (isProcessing ? Math.min(6 + smoothTPS * 0.28, 28) : idleAmp) * SMOOTH;
+            smoothSpeed = smoothSpeed * (1 - SMOOTH) + (isProcessing ? Math.max(0.04, Math.min(smoothTPS * 0.004, 0.55)) : idleSpeed) * SMOOTH;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const H = canvas.height / 2;
@@ -12663,31 +13847,40 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             const color1 = tpsToColor(smoothTPS, 1);
             const color2 = tpsToColor(smoothTPS, 0.25);
 
-            // Primary wave — uses 3 overlaid sin components for organic shape
+            // Primary wave — flat when calm-idle, organic when live
             ctx.beginPath();
             ctx.strokeStyle = color1;
-            ctx.lineWidth = isProcessing ? 1.8 : 1.2;
-            for (let x = 0; x < W; x += 2) {
-                const noise = smoothTPS > 5 ? Math.sin(x * 0.08 + phase * 2.3) * (smoothAmp * 0.15) : 0;
-                const y = H
-                    + Math.sin(x * 0.022 + phase) * smoothAmp
-                    + Math.sin(x * 0.011 + phase * 1.7) * (smoothAmp * 0.45)
-                    + noise;
-                x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            ctx.lineWidth = isProcessing ? 1.8 : (calmIdle ? 1 : 1.2);
+            if (!isProcessing && calmIdle && smoothAmp < 1.2) {
+                // True flat baseline with tiny breath
+                const breath = Math.sin(phase * 0.5) * 0.6;
+                ctx.moveTo(0, H + breath);
+                ctx.lineTo(W, H + breath);
+            } else {
+                for (let x = 0; x < W; x += 2) {
+                    const noise = smoothTPS > 5 ? Math.sin(x * 0.08 + phase * 2.3) * (smoothAmp * 0.15) : 0;
+                    const y = H
+                        + Math.sin(x * 0.022 + phase) * smoothAmp
+                        + Math.sin(x * 0.011 + phase * 1.7) * (smoothAmp * 0.45)
+                        + noise;
+                    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                }
             }
             ctx.stroke();
 
-            // Secondary wave — offset, subtler
-            ctx.beginPath();
-            ctx.strokeStyle = color2;
-            ctx.lineWidth = 1;
-            for (let x = 0; x < W; x += 3) {
-                const y = H
-                    + Math.sin(x * 0.018 + phase + 0.9) * (smoothAmp * 0.55)
-                    + Math.sin(x * 0.032 + phase * 0.7) * (smoothAmp * 0.2);
-                x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            // Secondary wave — skip when calm idle (less visual noise)
+            if (isProcessing || !calmIdle) {
+                ctx.beginPath();
+                ctx.strokeStyle = color2;
+                ctx.lineWidth = 1;
+                for (let x = 0; x < W; x += 3) {
+                    const y = H
+                        + Math.sin(x * 0.018 + phase + 0.9) * (smoothAmp * 0.55)
+                        + Math.sin(x * 0.032 + phase * 0.7) * (smoothAmp * 0.2);
+                    x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                }
+                ctx.stroke();
             }
-            ctx.stroke();
 
             // Glow pulse on high TPS — subtle fill under primary wave
             if (smoothTPS > 30) {
@@ -12741,7 +13934,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 const p=JSON.parse(s);
                 state={...state,...p,processingConversations:{}};
                 updateUIFromState();
-                // Re-apply coding mode body class + button state + indicator badge
+                // Re-apply coding mode body class + button state + agent shell
                 if (state.codingMode) {
                     document.body.classList.add('coding-mode');
                     const cmBtn = document.getElementById('btn-coding-mode');
@@ -12763,6 +13956,8 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                         }
                         updateCodingFolderUI();
                     }
+                    try { registerFSTools(); } catch (_) {}
+                    syncCodeAgentShell();
                 }
             }
         } catch {}
@@ -13438,6 +14633,7 @@ ${result}`));
 
             // Re-attach copy/run action buttons
             attachActions(aetherMsg, fullContent);
+            attachRagCitations(aetherMsg);
             smoothScrollToBottom();
         }
 
@@ -13473,10 +14669,7 @@ ${result}`));
                     display.appendChild(wsEl);
                 }
                 for (const { name, result } of otherBR) {
-                    const toolEl = document.createElement('div');
-                    toolEl.className = 'aether-msg tool-result-msg';
-                    toolEl.appendChild(parseMarkdown('**[' + name + ']**\n\n' + String(result).slice(0, 2000)));
-                    display.appendChild(toolEl);
+                    display.appendChild(renderToolResultCard(name, result));
                 }
                 const bracketContext = bracketResults.map(r => '[' + r.name + ' result]\n' + String(r.result)).join('\n\n');
                 // Mark as 'system' so it's used as context but never re-rendered as a user bubble on reload
@@ -13664,6 +14857,7 @@ ${result}`));
                         aetherMsg.appendChild(parseMarkdown(textOnly));
                     }
                     attachActions(aetherMsg, renderContent);
+                    attachRagCitations(aetherMsg);
                     const fmt = guessFileFormat(lastUserMsg);
                     const heading = renderContent.match(/^#{1,3}\s+(.+)/m);
                     const autoCard = createFileCard(renderContent, fmt, heading ? heading[1].trim() : null);
@@ -13671,6 +14865,7 @@ ${result}`));
                 } else {
                     aetherMsg.appendChild(parseMarkdown(renderContent));
                     attachActions(aetherMsg, renderContent);
+                    attachRagCitations(aetherMsg);
                     // Auto-launch Construct if a complete HTML app was generated
                     if (shouldAutoConstruct(lastUserMsg, renderContent)) {
                         const htmlMatch = renderContent.match(/```(?:html?)[^\n]*\n([\s\S]*?)```/i) || [null, renderContent];
@@ -13711,7 +14906,7 @@ ${result}`));
 
     // ─── SEND MESSAGE ────────────────────────────────────────
     async function sendMessage() {
-        const msg = input.value.trim(); if(!msg) return;
+        let msg = input.value.trim(); if(!msg) return;
         if(isQuotaExceeded()){ showNotification('API calls blocked — quota limit reached. Reset in QUOTA settings.','error'); return; }
         const now=Date.now();
         if(now-state.lastRequestTime<state.rateLimitMs){ showNotification('Rate limit — wait a moment','warn'); return; }
@@ -13720,6 +14915,20 @@ ${result}`));
         const conv=getCurrentConversation();
         const convId=conv.id;
         if(state.processingConversations[convId]){ showNotification('This conversation is still generating','warn'); return; }
+
+        // ─── CODE PRO: expand @mentions / pins into hidden context ──
+        let codeProContext = '';
+        if (state.codingMode && typeof AETHER_CodePro !== 'undefined' && AETHER_CodePro.expandMentionsInMessage) {
+            try {
+                const expanded = await AETHER_CodePro.expandMentionsInMessage(msg);
+                if (expanded) {
+                    if (expanded.userText) msg = expanded.userText.trim() || msg;
+                    codeProContext = expanded.contextBlock || '';
+                }
+            } catch (e) {}
+        }
+        // Stash for buildSystemPrompt / message pipeline (one-shot)
+        window.__aetherCodeProContext = codeProContext;
 
         // ─── CODING MODE SHELL INTERCEPT ──────────────────────────
         // When Coding Mode is active and a folder is linked, shell-style
@@ -13965,6 +15174,9 @@ ${result}`));
         let visionImage=null;
         if(state.visionImageBase64){ visionImage=state.visionImageBase64; finalMessage=finalRawMsg||'Describe this image in detail.'; }
         if(state.extractedOCRText&&state.currentImageFile){ finalMessage=`[Image: ${state.currentImageFile.name}]\n[OCR Text: ${state.extractedOCRText}]\n\nUser Query: ${finalRawMsg}`; }
+        // CODE Pro: append expanded @file / @blast / pins (hidden from bubble, visible to model)
+        if (codeProContext) finalMessage = finalMessage + codeProContext;
+        window.__aetherCodeProContext = '';
 
         addUserMessage(msg+(visionImage?' [image attached]':''));
         input.value=''; input.style.height='auto';
@@ -14024,14 +15236,29 @@ ${result}`));
             }
 
             let fullSystemPrompt = systemPrompt;
-            if(state.ragEnabled){
-                const ctx=RAG.search(msg,3);
-                if(ctx.length){ fullSystemPrompt+='\n\n# BM25 KNOWLEDGE BASE CONTEXT\n'+ctx.map((c,i)=>`${i+1}. ${c.text.slice(0,400)}`).join('\n'); }
-                if(state.vectorRagEnabled&&state.oramaDb){
-                    const vctx=await searchVectorRAG(msg,2);
-                    if(vctx.length) fullSystemPrompt+='\n\n# VECTOR SEMANTIC CONTEXT\n'+vctx.map((c,i)=>`${i+1}. ${c.text.slice(0,300)}`).join('\n');
+            if (state.ragEnabled) {
+                try {
+                    const ragResult = await retrieveRAGv2(msg, {
+                        topK: state.codingMode ? 8 : 6,
+                        hybrid: true,
+                        collection: state.codingMode ? null : null, // all collections
+                    });
+                    if (ragResult.contextBlock) {
+                        fullSystemPrompt += '\n\n' + ragResult.contextBlock;
+                    } else if (ragResult.hits && ragResult.hits.length) {
+                        fullSystemPrompt += '\n\n# RAG CONTEXT\n' + ragResult.hits.map((c, i) =>
+                            `[${i + 1}] ${String(c.text).slice(0, 500)}`).join('\n\n');
+                    }
+                } catch (ragErr) {
+                    // Legacy fallback
+                    const ctx = RAG.search(msg, 3);
+                    if (ctx.length) {
+                        fullSystemPrompt += '\n\n# BM25 KNOWLEDGE BASE CONTEXT\n' +
+                            ctx.map((c, i) => `${i + 1}. ${c.text.slice(0, 400)}`).join('\n');
+                    }
                 }
             }
+            try { if (typeof AETHER_CodePro !== 'undefined' && AETHER_CodePro.renderBar) AETHER_CodePro.renderBar(); } catch (_) {}
 
             const apiMessages=prepareMessagesForApi(conv.messages.slice(0,-1), finalMessage); // exclude last user msg already in messages
             const lastMsg=apiMessages[apiMessages.length-1];
@@ -15845,9 +17072,99 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
         // ── Mode ──────────────────────────────────────────────
         { id:'agent',     label:'/agent',      desc:'Toggle Agent Mode on/off',                         group:'Mode',    action: () => { document.getElementById('btn-agent')?.click(); } },
-        { id:'research',  label:'/research',   desc:'Open Deep Research panel',                         group:'Mode',    action: () => { document.getElementById('btn-deep-research')?.click(); } },
+        { id:'golden',    label:'/golden', desc:'Run golden-path smoke suite (ship layer)', group:'System', action: () => {
+            if (typeof AETHER_Ship === 'undefined') { addSystemMessage('Ship layer offline'); return; }
+            addSystemMessage(AETHER_Ship.goldenMarkdown(AETHER_Ship.runGoldenPaths()));
+        } },
+        { id:'onboard',   label:'/onboard', desc:'Replay first-run onboarding wizard', group:'System', action: () => {
+            if (typeof AETHER_Ship !== 'undefined') AETHER_Ship.openOnboarding(true);
+            else showNotification('Ship offline', 'warn');
+        } },
+        { id:'ragstats',  label:'/ragstats', desc:'RAG v2 collections & hybrid stats', group:'System', action: async () => {
+            if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.ragQuickStatsMarkdown) {
+                addSystemMessage(await AETHER_Ship.ragQuickStatsMarkdown());
+            } else if (typeof AETHER_RAGv2 !== 'undefined' && AETHER_RAGv2.stats) {
+                addSystemMessage('**RAG:** `' + JSON.stringify(await AETHER_RAGv2.stats()) + '`');
+            } else addSystemMessage('RAG offline');
+        } },
+        { id:'moat',      label:'/moat [cmd]', desc:'Moat panel · score · export · handoff code|pr', group:'System', action: (arg) => {
+            const a = (arg || '').trim().toLowerCase();
+            if (!a || a === 'open' || a === 'panel') {
+                if (typeof openMoatPanel === 'function') openMoatPanel();
+                else if (typeof AETHER_Moat !== 'undefined') AETHER_Moat.openPanel();
+                return;
+            }
+            if (typeof AETHER_Moat === 'undefined') { showNotification('Moat offline', 'warn'); return; }
+            if (a === 'score' || a === 'status') {
+                const s = AETHER_Moat.computeScore();
+                addSystemMessage(
+                    '**Moat score: ' + s.overall + '/100 (grade ' + s.grade + ')**\n\n' +
+                    s.pillars.map(function(p){ return '- **' + p.label + '** ' + p.score + '% — ' + p.detail; }).join('\n')
+                );
+                return;
+            }
+            if (a === 'export' || a === 'trust') {
+                AETHER_Moat.downloadTrustPack();
+                showNotification('Trust pack exported', 'success');
+                return;
+            }
+            if (a === 'brief' || a === 'why') {
+                addSystemMessage(AETHER_Moat.positioningMarkdown());
+                return;
+            }
+            if (a.indexOf('handoff') === 0 || a === 'code' || a === 'handoff code') {
+                if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.handoffResearchToCode) {
+                    const r = AETHER_Ship.handoffResearchToCode({
+                        task: 'Convert latest research into concrete code changes.',
+                    });
+                    showNotification(r.hasReport ? 'Handoff with full report' : 'Handoff (no stored report yet)', r.hasReport ? 'success' : 'info');
+                } else {
+                    AETHER_Moat.handoffResearchToCode({ topic: 'research → implementation', summary: '' });
+                }
+                return;
+            }
+            if (a === 'pr' || a === 'ghost' || a === 'handoff pr') {
+                if (typeof AETHER_Ship !== 'undefined') AETHER_Ship.handoffGhostToPR();
+                else AETHER_Moat.handoffGhostToPR();
+                return;
+            }
+            if (a === 'clear') {
+                if (confirm('Clear moat provenance ledger?')) {
+                    AETHER_Moat.clearProvenance();
+                    showNotification('Provenance cleared', 'info');
+                }
+                return;
+            }
+            openMoatPanel();
+        } },
+        { id:'research',  label:'/research [topic]', desc:'Deep Research v3 — toggle config or run topic', group:'Mode', action: (arg) => {
+            const a = (arg || '').trim();
+            if (!a) { document.getElementById('btn-deep-research')?.click(); return; }
+            if (a === 'status' || a === 'sources') {
+                const L = typeof drLastLedger !== 'undefined' ? drLastLedger : null;
+                if (!L || !L.sources || !L.sources.length) { addSystemMessage('No Deep Research ledger yet. Run a topic first.'); return; }
+                const md = (typeof AETHER_DeepResearch !== 'undefined')
+                    ? AETHER_DeepResearch.citationsMarkdown(L, 30)
+                    : L.sources.map(function(s,i){ return (i+1)+'. '+(s.url||s.title||''); }).join('\n');
+                addSystemMessage(md);
+                return;
+            }
+            if (a === 'stop') {
+                if (drAbortCtrl) drAbortCtrl.abort();
+                drPipelineActive = false;
+                state.deepResearch = false;
+                document.getElementById('btn-deep-research')?.classList.remove('active');
+                showNotification('Deep Research stopped', 'warn');
+                return;
+            }
+            // Run pipeline on topic
+            state.deepResearch = true;
+            document.getElementById('btn-deep-research')?.classList.add('active');
+            addUserMessage(a);
+            runDeepResearchPipeline(a);
+        } },
         { id:'call',      label:'/call',       desc:'Start an AETHER voice call',                       group:'Mode',    action: () => { startAETHERCall(null,'slash-command'); } },
-        { id:'code',      label:'/code',       desc:'Toggle Coding Mode',                               group:'Mode',    action: () => { document.getElementById('btn-coding')?.click(); } },
+        { id:'code',      label:'/code',       desc:'Toggle Coding Mode',                               group:'Mode',    action: () => { document.getElementById('btn-coding-mode')?.click(); } },
         { id:'cot',       label:'/cot',        desc:'Toggle Chain-of-Thought reasoning',                group:'Mode',    action: () => { state.coTEnabled=!state.coTEnabled; saveState(); showNotification('CoT: '+(state.coTEnabled?'ON':'OFF'),'info'); } },
         { id:'stream',    label:'/stream',     desc:'Toggle streaming response on/off',                 group:'Mode',    action: () => { state.streamingEnabled=!state.streamingEnabled; saveState(); showNotification('Streaming: '+(state.streamingEnabled?'ON':'OFF'),'info'); } },
         { id:'rag',       label:'/rag',        desc:'Toggle RAG memory on/off',                         group:'Mode',    action: () => { state.ragEnabled=!state.ragEnabled; saveState(); showNotification('RAG: '+(state.ragEnabled?'ON':'OFF'),'info'); } },
@@ -15871,7 +17188,341 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
         { id:'soul',      label:'/soul',        desc:'Open the AETHER Soul viewer',                    group:'System',  action: () => { window.openSoulViewer?.(); } },
         { id:'notes',     label:'/notes',       desc:'Open Release Notes & Changelog',                 group:'System',  action: () => { openReleaseNotes(); } },
         { id:'shortcuts', label:'/shortcuts',   desc:'Show all slash commands',                        group:'System',  action: () => { addSystemMessage(SLASH_COMMANDS.map(c=>'`'+c.label+'` — '+c.desc).join('\n')); } },
-        { id:'version',   label:'/version',     desc:'Show AETHER version info',                       group:'System',  action: () => { addSystemMessage('**AETHER Neural Interface v5.15**\n\nProviders: '+PROVIDER_REGISTRY.length+' · Tools: '+Object.keys(TOOL_REGISTRY).length+' · RAG docs: '+RAG.totalDocs); } },
+        { id:'version',   label:'/version',     desc:'Show AETHER version info',                       group:'System',  action: () => { const v=typeof AETHER_FULL_LABEL!=='undefined'?AETHER_FULL_LABEL:'AETHER v5.30'; const sk=typeof AETHER_SKILLS!=='undefined'?Object.keys(AETHER_SKILLS).length:0; const pol=typeof AETHER_SkillRuntime!=='undefined'?AETHER_SkillRuntime.getPolicyMode():'n/a'; addSystemMessage('**'+v+'**\n\nProviders: '+PROVIDER_REGISTRY.length+' · Tools: '+Object.keys(TOOL_REGISTRY).length+' · Skills: **'+sk+'** · Policy: `'+pol+'` · RAG docs: '+RAG.totalDocs+(typeof AETHER_Beast!=='undefined'&&AETHER_Beast.isEnabled()?' · **BEAST MODE ON**':'')+'\n\nSkill Runtime · Code Pro · Ghost · fs_patch · RAG v2 · MCP'); } },
+        { id:'skills',    label:'/skills [q]',  desc:'Open Skills panel, or list/activate by name',   group:'Mode',    action: (arg) => {
+            const a = (arg || '').trim();
+            if (!a) { if (typeof openSkillsPanel === 'function') openSkillsPanel(); return; }
+            const parts = a.split(/\s+/);
+            const cmd = parts[0].toLowerCase();
+            if (cmd === 'list' || cmd === 'ls') {
+                const q = parts.slice(1).join(' ').toLowerCase();
+                const list = Object.values(AETHER_SKILLS).filter(function(s) {
+                    if (!q) return true;
+                    return (s.label + ' ' + s.name + ' ' + s.category + ' ' + (s.tier||'')).toLowerCase().indexOf(q) >= 0;
+                }).sort(function(x,y){ return (x.label||'').localeCompare(y.label||''); });
+                addSystemMessage('**Skills** (' + list.length + '/' + Object.keys(AETHER_SKILLS).length + ')\n\n' + list.map(function(s) {
+                    return '- `' + s.name + '` — **' + s.label + '** · ' + (s.tier||'standard') + ' · ' + s.category;
+                }).join('\n') + '\n\n`/skills activate <name>` · `/workflow skill wf goal` · `/skills` opens panel');
+                return;
+            }
+            if (cmd === 'activate' || cmd === 'on' || cmd === 'use') {
+                const id = parts.slice(1).join(' ').trim();
+                if (!id) { showNotification('Usage: /skills activate aether-code', 'warn'); return; }
+                activateSkill(id);
+                return;
+            }
+            if (cmd === 'off' || cmd === 'deactivate' || cmd === 'clear') {
+                const id = parts.slice(1).join(' ').trim();
+                deactivateSkill(id || null);
+                return;
+            }
+            if (cmd === 'preset') {
+                const pid = parts[1];
+                if (typeof applySkillPreset === 'function') applySkillPreset(pid || 'builder');
+                return;
+            }
+            // treat arg as search → open panel with search filled
+            if (typeof openSkillsPanel === 'function') {
+                openSkillsPanel();
+                const el = document.getElementById('skills-search');
+                if (el) { el.value = a; if (typeof renderSkillsPanel === 'function') renderSkillsPanel(); }
+            }
+        } },
+        { id:'workflow',  label:'/workflow <skill> <wf> [goal]', desc:'Start a skill playbook (Skill Runtime)', group:'Mode', action: (arg) => {
+            const a = (arg || '').trim();
+            if (!a) {
+                addSystemMessage('**Usage:** `/workflow aether-code bugfix fix null crash in auth`\n\nAlso: `/workflow list aether-code` · `/skillpolicy prefer|strict|off` · `/skillsmoke`');
+                return;
+            }
+            const parts = a.split(/\s+/);
+            if (parts[0].toLowerCase() === 'list') {
+                const sn = parts[1] || 'aether-code';
+                const sk = resolveAetherSkill(sn);
+                if (!sk) { showNotification('Unknown skill', 'warn'); return; }
+                const wfs = (typeof AETHER_SkillRuntime !== 'undefined')
+                    ? AETHER_SkillRuntime.listWorkflows(sk)
+                    : Object.keys(sk.workflows||{}).map(function(id){ return { id:id, desc:(sk.workflows[id]||{}).desc }; });
+                addSystemMessage('**Workflows — ' + sk.label + '**\n\n' + wfs.map(function(w){
+                    return '- `' + w.id + '` — ' + (w.desc || '') + (w.source === 'playbook' ? ' _(playbook)_' : '');
+                }).join('\n') + '\n\n`/workflow ' + sk.name + ' <id> [goal]`');
+                return;
+            }
+            if (parts[0].toLowerCase() === 'cancel' || parts[0].toLowerCase() === 'stop') {
+                if (typeof AETHER_SkillRuntime !== 'undefined') {
+                    AETHER_SkillRuntime.finishRun('cancelled');
+                    AETHER_SkillRuntime.clearRun();
+                    refreshSkillRuntimeBar();
+                }
+                showNotification('Playbook cancelled', 'info');
+                return;
+            }
+            if (parts[0].toLowerCase() === 'status') {
+                const run = typeof AETHER_SkillRuntime !== 'undefined' ? AETHER_SkillRuntime.getRun() : null;
+                addSystemMessage(run
+                    ? '**Playbook:** `' + run.skillName + '/' + run.workflowId + '` · step ' + (run.stepIndex+1) + '/' + run.steps.length + ' · ' + run.status
+                    : 'No active playbook.');
+                return;
+            }
+            const skillName = parts[0];
+            const wfId = parts[1];
+            if (!wfId) { showNotification('Usage: /workflow <skill> <workflow> [goal]', 'warn'); return; }
+            const goal = parts.slice(2).join(' ');
+            runSkillWorkflow(skillName, wfId, goal);
+        } },
+        { id:'skillpolicy', label:'/skillpolicy [mode]', desc:'Tool policy: prefer | strict | off', group:'Mode', action: (arg) => {
+            if (typeof AETHER_SkillRuntime === 'undefined') { showNotification('Skill Runtime offline', 'warn'); return; }
+            const m = (arg || '').trim().toLowerCase();
+            if (!m) {
+                addSystemMessage('**Skill tool policy:** `' + AETHER_SkillRuntime.getPolicyMode() + '`\n\n`prefer` (default) · `strict` (block non-preferred) · `off`');
+                return;
+            }
+            if (m !== 'prefer' && m !== 'strict' && m !== 'off') {
+                showNotification('Use prefer | strict | off', 'warn');
+                return;
+            }
+            AETHER_SkillRuntime.setPolicyMode(m);
+            showNotification('Skill policy: ' + m, 'success');
+        } },
+        { id:'skillsmoke', label:'/skillsmoke', desc:'Run Skill Runtime golden smoke tests', group:'System', action: () => {
+            if (typeof AETHER_SkillRuntime === 'undefined') { addSystemMessage('Skill Runtime offline'); return; }
+            const r = AETHER_SkillRuntime.runGoldenSmokes(AETHER_SKILLS);
+            addSystemMessage(
+                '**Skill Runtime smoke** — ' + (r.ok ? '✓ PASS' : '✗ FAIL') +
+                ' · ' + r.passed + '/' + r.total + '\n\n' +
+                r.results.map(function(x){ return (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : ''); }).join('\n')
+            );
+        } },
+        { id:'beast',     label:'/beast',       desc:'Toggle Beast Mode (max autonomy)',               group:'Mode',    action: () => { if(typeof AETHER_Beast!=='undefined'){ AETHER_Beast.toggle({state,saveState,showNotification}); } } },
+        { id:'whoami',    label:'/whoami',      desc:'Soul OS identity dump',                          group:'System',  action: () => { addSystemMessage(typeof AETHER_SoulOS!=='undefined'?AETHER_SoulOS.whoamiMarkdown():'Soul OS offline'); } },
+        { id:'council',   label:'/council [q]', desc:'Convene Model Council',                          group:'Mode',    action: (arg) => { if(window.AETHER_runCouncil) window.AETHER_runCouncil(arg||'What should we prioritize next?'); else showNotification('Council bridge loading…','warn'); } },
+        { id:'kernel',    label:'/kernel',      desc:'Open flight recorder',                           group:'System',  action: () => { if(typeof AETHER_Kernel!=='undefined') AETHER_Kernel.openTimelineModal(); } },
+        { id:'graph',     label:'/graph',       desc:'Toggle neural thread graph',                     group:'System',  action: () => { if(typeof AETHER_ThreadGraph!=='undefined') AETHER_ThreadGraph.toggle(); } },
+        { id:'theme',     label:'/theme [name]',desc:'Cycle themes, or /theme ivory|void|plasma|monolith', group:'System',  action: (arg) => {
+            if (typeof AETHER_Themes === 'undefined') return;
+            const a = (arg || '').trim().toLowerCase();
+            if (a === 'ivory' || a === 'warm' || a === 'light' || a === 'paper') {
+              AETHER_Themes.apply('ivory');
+              showNotification('Warm Ivory — calm paper theme', 'success');
+            } else if (a && AETHER_Themes.THEMES[a]) {
+              AETHER_Themes.apply(a);
+              showNotification('Theme: ' + AETHER_Themes.THEMES[a].label, 'info');
+            } else {
+              AETHER_Themes.cycle();
+            }
+          } },
+        { id:'ivory',     label:'/ivory',       desc:'Switch to Warm Ivory light theme',               group:'System',  action: () => { if(typeof AETHER_Themes!=='undefined'){ AETHER_Themes.apply('ivory'); showNotification('Warm Ivory online','success'); } } },
+        { id:'theater',   label:'/theater',     desc:'Toggle cognition theater',                       group:'Mode',    action: () => { if(typeof AETHER_Theater!=='undefined'){ const on=!document.documentElement.classList.contains('cognition-theater'); AETHER_Theater.setEnabled(on); showNotification('Theater '+(on?'ON':'OFF'),'info'); } } },
+        { id:'ghost',     label:'/ghost',       desc:'Refresh ghost commit dock',                      group:'Tools',   action: () => { if(typeof AETHER_Ghost!=='undefined') AETHER_Ghost.render(); showNotification('Ghost dock refreshed','info'); } },
+        // ── Aether Code Pro ─────────────────────────────────────
+        { id:'checkpoint',label:'/checkpoint',  desc:'Snapshot pending/touched files (undo later)',    group:'Code',    action: async () => {
+            if (typeof AETHER_CodePro === 'undefined') return showNotification('Code Pro offline','warn');
+            const paths = (AETHER_CodePro.getTouched && AETHER_CodePro.getTouched()) || [];
+            const pend = (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.loadQueue)
+                ? AETHER_Ghost.loadQueue().filter(x => x.status === 'pending').map(x => x.path) : [];
+            await AETHER_CodePro.snapshotPaths(pend.length ? pend : paths, 'slash');
+        } },
+        { id:'restore',   label:'/restore',     desc:'Restore latest CODE checkpoint',                 group:'Code',    action: () => { if (typeof AETHER_CodePro !== 'undefined') AETHER_CodePro.restoreLatest(); else showNotification('Code Pro offline','warn'); } },
+        { id:'verify',    label:'/verify [cmd]',desc:'Run tests / verify command on project',           group:'Code',    action: (arg) => { if (typeof AETHER_CodePro !== 'undefined') AETHER_CodePro.runVerify(arg||''); else showNotification('Code Pro offline','warn'); } },
+        { id:'acceptall', label:'/acceptall',   desc:'Accept all pending Ghost patches',               group:'Code',    action: () => { if (typeof AETHER_CodePro !== 'undefined') AETHER_CodePro.acceptAllGhosts(); } },
+        { id:'rejectall', label:'/rejectall',   desc:'Reject all pending Ghost patches',               group:'Code',    action: () => { if (typeof AETHER_CodePro !== 'undefined') AETHER_CodePro.rejectAllGhosts(); } },
+        { id:'review',    label:'/review',      desc:'Load AI review prompt for pending ghosts',       group:'Code',    action: () => { if (typeof AETHER_CodePro !== 'undefined') AETHER_CodePro.reviewPrompt(); } },
+        { id:'blast',     label:'/blast',       desc:'Show blast radius (files touched this session)', group:'Code',    action: () => {
+            if (typeof AETHER_CodePro === 'undefined') return;
+            const t = AETHER_CodePro.getTouched() || [];
+            addSystemMessage('**Blast radius** — ' + t.length + ' file(s)\n\n' + (t.length ? t.map(p => '- `'+p+'`').join('\n') : '_Nothing touched yet_'));
+        } },
+        { id:'memory',    label:'/memory [note]',desc:'Save CODE session memory note (or list)',       group:'Code',    action: (arg) => {
+            if (typeof AETHER_CodePro === 'undefined') return showNotification('Code Pro offline','warn');
+            if (arg) { AETHER_CodePro.addMemory(arg); return; }
+            const m = AETHER_CodePro.getMemory();
+            const notes = (m.notes||[]).slice(0,12).map(n => '- ' + n.text).join('\n') || '_empty_';
+            addSystemMessage('**CODE memory**\n\n' + (m.rules ? 'Rules:\n'+m.rules+'\n\n' : '') + 'Notes:\n' + notes);
+        } },
+        { id:'memrule',   label:'/memrule [text]',desc:'Set sticky CODE session rules',               group:'Code',    action: (arg) => {
+            if (typeof AETHER_CodePro === 'undefined') return;
+            if (!arg) return showNotification('Usage: /memrule Always use TypeScript strict','warn');
+            AETHER_CodePro.setRules(arg);
+            showNotification('CODE rules set','success');
+        } },
+        { id:'sub',       label:'/sub [role] [goal]', desc:'Spawn subagent: explore|plan|edit|review', group:'Code', action: (arg) => {
+            if (typeof AETHER_Subagents === 'undefined') return showNotification('Subagents offline','warn');
+            const m = (arg||'').trim().match(/^(explore|plan|edit|review)\s+([\s\S]+)/i);
+            if (!m) return showNotification('Usage: /sub explore find auth middleware','warn');
+            AETHER_Subagents.spawn({ role: m[1].toLowerCase(), goal: m[2] });
+        } },
+        { id:'swarm',     label:'/swarm [goal]', desc:'Explore→plan swarm (--edit --parallel --review)', group:'Code', action: (arg) => {
+            if (typeof AETHER_Subagents === 'undefined') return showNotification('Subagents offline','warn');
+            if (!arg) return showNotification('Usage: /swarm add dark mode --parallel --edit','warn');
+            const edit = /\s--edit\b/i.test(arg);
+            const parallel = /\s--parallel\b/i.test(arg);
+            const review = /\s--review\b/i.test(arg);
+            const goal = arg.replace(/\s--(edit|parallel|review)\b/gi, '').trim();
+            AETHER_Subagents.swarm(goal, { edit: edit, parallel: parallel, review: review, autoPr: edit });
+        } },
+        { id:'pexplore',  label:'/pexplore [goal]', desc:'3 parallel explore agents',                 group:'Code', action: (arg) => {
+            if (typeof AETHER_Subagents === 'undefined') return showNotification('Subagents offline','warn');
+            if (!arg) return showNotification('Usage: /pexplore auth flow','warn');
+            AETHER_Subagents.parallelExplore(arg.trim());
+        } },
+        { id:'git',       label:'/git',         desc:'Git Lite status (branch, ghosts, blast)',       group:'Code', action: async () => {
+            if (typeof AETHER_GitLite === 'undefined') return showNotification('Git Lite offline','warn');
+            const st = await AETHER_GitLite.status(true);
+            addSystemMessage(AETHER_GitLite.statusMarkdown(st));
+            try { AETHER_GitLite.refreshChip(); } catch(_) {}
+        } },
+        { id:'commitmsg', label:'/commitmsg',   desc:'Draft commit message from ghosts/PR',           group:'Code', action: () => {
+            if (typeof AETHER_GitLite === 'undefined') return;
+            const m = AETHER_GitLite.draftCommitMessage();
+            addSystemMessage('**Draft commit**\n\n```\n' + m + '\n```');
+            try { navigator.clipboard?.writeText(m); showNotification('Commit message copied','success'); } catch(_) {}
+        } },
+        { id:'pr',        label:'/pr [title]',  desc:'Group pending ghosts into a PR change set',     group:'Code', action: (arg) => {
+            if (typeof AETHER_ChangeSet === 'undefined') return showNotification('Change sets offline','warn');
+            AETHER_ChangeSet.createFromPending({ title: (arg||'').trim() || undefined });
+        } },
+        { id:'prcopy',    label:'/prcopy',      desc:'Copy active PR change set as markdown',         group:'Code', action: () => {
+            if (typeof AETHER_ChangeSet !== 'undefined') AETHER_ChangeSet.copyMarkdown();
+        } },
+        { id:'prexport',  label:'/prexport',    desc:'Download active PR change set .md',             group:'Code', action: () => {
+            if (typeof AETHER_ChangeSet !== 'undefined') AETHER_ChangeSet.exportMarkdown();
+        } },
+        { id:'packs',     label:'/packs',       desc:'List MCP-style tool packs',                     group:'Code', action: () => {
+            if (typeof AETHER_ToolPacks === 'undefined') return showNotification('Tool packs offline','warn');
+            addSystemMessage('**Tool packs**\n\n' + AETHER_ToolPacks.listMarkdown());
+            try { AETHER_ToolPacks.renderUI(); } catch(_) {}
+        } },
+        { id:'pack',      label:'/pack [id]',   desc:'Toggle a tool pack on/off',                     group:'Code', action: (arg) => {
+            if (typeof AETHER_ToolPacks === 'undefined') return;
+            if (!arg) return showNotification('Usage: /pack github','warn');
+            AETHER_ToolPacks.toggle(arg.trim().toLowerCase());
+        } },
+        { id:'packimport',label:'/packimport',  desc:'Import custom tool pack from JSON',             group:'Code', action: (arg) => {
+            if (typeof AETHER_ToolPacks === 'undefined') return;
+            if (arg && arg.trim().startsWith('{')) AETHER_ToolPacks.importJSON(arg.trim());
+            else AETHER_ToolPacks.promptImport();
+        } },
+        { id:'mcp',       label:'/mcp [json|url]', desc:'Import MCP tools/list JSON or bridge URL',  group:'Code', action: async (arg) => {
+            if (typeof AETHER_MCP === 'undefined') return showNotification('MCP bridge offline','warn');
+            if (!arg) {
+                addSystemMessage('**MCP bridge** (browser-safe)\n\n' + AETHER_MCP.listMarkdown() +
+                    '\n\n**Usage**\n- `/mcp` — list imported servers\n- `/mcp {json}` — import tools/list or server manifest\n- `/mcp http://127.0.0.1:PORT/mcp` — tools/list from local bridge\n- `/mcp remove <id>` — uninstall\n\nNo stdio. Optional localhost HTTP JSON-RPC bridge only.');
+                return;
+            }
+            const a = arg.trim();
+            if (/^remove\s+/i.test(a)) {
+                AETHER_MCP.uninstall(a.replace(/^remove\s+/i, '').trim());
+                return;
+            }
+            if (/^https?:\/\//i.test(a)) {
+                try {
+                    await AETHER_MCP.importFromEndpoint(a);
+                } catch (e) {
+                    showNotification('MCP fetch failed: ' + e.message, 'error');
+                }
+                return;
+            }
+            AETHER_MCP.importJSON(a);
+        } },
+        { id:'rag',       label:'/rag [cmd]',   desc:'RAG v2: stats|search|clear|hybrid on|off',      group:'System', action: async (arg) => {
+            const a = (arg || '').trim();
+            if (typeof AETHER_RAGv2 === 'undefined') {
+                addSystemMessage('**RAG** — legacy BM25 only (`' + (RAG.totalDocs || 0) + '` docs). RAG v2 module not loaded.');
+                return;
+            }
+            await AETHER_RAGv2.ready();
+            if (!a || a === 'stats') {
+                const s = AETHER_RAGv2.stats();
+                addSystemMessage(
+                    '**RAG v2**\n\n' +
+                    '- Chunks: **' + s.chunks + '**\n' +
+                    '- Hybrid: **' + (s.hybrid ? 'ON' : 'OFF') + '**\n' +
+                    '- Collections:\n' +
+                    (s.collections.length
+                        ? s.collections.map(function (c) { return '  - `' + c.id + '`: ' + c.chunks + ' chunks'; }).join('\n')
+                        : '  _(empty)_') +
+                    '\n\nCommands: `/rag search <q>` · `/rag clear [collection]` · `/rag hybrid on|off` · `/rag index` (re-run project index)'
+                );
+                return;
+            }
+            if (/^hybrid\s+(on|off)/i.test(a)) {
+                const on = /on/i.test(a);
+                AETHER_RAGv2.setSettings({ hybrid: on });
+                state.vectorRagEnabled = on;
+                saveState();
+                showNotification('RAG hybrid ' + (on ? 'ON' : 'OFF'), 'success');
+                return;
+            }
+            if (/^clear/i.test(a)) {
+                const col = a.replace(/^clear\s*/i, '').trim() || null;
+                await AETHER_RAGv2.clear(col || undefined);
+                showNotification(col ? 'Cleared collection ' + col : 'RAG cleared', 'info');
+                return;
+            }
+            if (/^search\s+/i.test(a)) {
+                const q = a.replace(/^search\s+/i, '').trim();
+                const r = await AETHER_RAGv2.search(q, { topK: 8 });
+                if (!r.hits.length) {
+                    addSystemMessage('**RAG search** — no hits for `' + q + '`');
+                    return;
+                }
+                let md = '**RAG search:** `' + q + '`\n\n';
+                r.citations.forEach(function (c) {
+                    md += '**[' + c.n + ']** `' + c.source + (c.chunk != null ? '#' + c.chunk : '') + '`\n> ' + c.snippet + '\n\n';
+                });
+                addSystemMessage(md);
+                return;
+            }
+            // treat as search query
+            const r = await AETHER_RAGv2.search(a, { topK: 6 });
+            addSystemMessage(r.hits.length
+                ? '**RAG:** `' + a + '`\n\n' + r.citations.map(function (c) {
+                    return '**[' + c.n + ']** `' + c.source + '` — ' + c.snippet;
+                }).join('\n')
+                : 'No hits.');
+        } },
+        { id:'security',  label:'/security',    desc:'Security status & policy flags',                group:'System', action: () => {
+            const S = typeof AETHER_Security !== 'undefined' ? AETHER_Security : null;
+            if (!S) { addSystemMessage('Security module offline'); return; }
+            addSystemMessage(
+                '**AETHER Security**\n\n' +
+                '- Path traversal: **blocked**\n' +
+                '- Shell allowlist: `' + Object.keys({ls:1,cat:1,grep:1,find:1,tree:1,pwd:1,mkdir:1,head:1,tail:1,wc:1}).join('` `') + '`…\n' +
+                '- Destructive tools gated: **' + (S.DESTRUCTIVE_TOOLS||[]).length + '**\n' +
+                '- Secret redaction: **on** (logs/history/tool output)\n' +
+                '- MCP endpoints: **localhost only**\n' +
+                '- Private HTTP SSRF guard: **' + (S.flags.blockPrivateHttp ? 'on' : 'off') + '**\n' +
+                '- JS eval in code console: **disabled**\n' +
+                '- CSP + nosniff headers: **on**\n' +
+                '- Tool rate limit: **40 / 10s**\n\n' +
+                'Flags: `blockPrivateHttp`, `allowPuterTerminal`, `confirmAllWrites` via `AETHER_Security.setFlag(name, bool)`'
+            );
+        } },
+        { id:'tools',     label:'/tools',       desc:'List tools + recent tool call history',         group:'System', action: (arg) => {
+            const keys = Object.keys(TOOL_REGISTRY);
+            let md = '**Tools** — ' + keys.length + ' registered\n\n';
+            if (typeof AETHER_ToolRuntime !== 'undefined') {
+                const cat = AETHER_ToolRuntime.listCatalog();
+                const by = {};
+                cat.forEach(function (c) { (by[c.class] = by[c.class] || []).push(c.name); });
+                Object.keys(by).forEach(function (k) {
+                    md += '**' + k + ':** `' + by[k].join('` · `') + '`\n';
+                });
+                const hist = AETHER_ToolRuntime.loadHistory().slice(0, 12);
+                if (hist.length) {
+                    md += '\n**Recent calls**\n';
+                    hist.forEach(function (h) {
+                        md += '- ' + (h.ok ? '✓' : '✗') + ' `' + h.name + '` ' + (h.ms != null ? h.ms + 'ms' : '') + ' — ' + (h.preview || '').slice(0, 60) + '\n';
+                    });
+                }
+            } else {
+                md += keys.map(function (k) { return '`' + k + '`'; }).join(' · ');
+            }
+            if (arg && arg.trim()) {
+                const q = arg.trim().toLowerCase();
+                md += '\n\n_Filter:_ `' + q + '`\n' + keys.filter(function (k) { return k.includes(q); }).map(function (k) { return '- `' + k + '` — ' + (TOOL_REGISTRY[k].desc || ''); }).join('\n');
+            }
+            addSystemMessage(md);
+        } },
         { id:'reset',     label:'/reset',       desc:'Reset all settings to defaults',                 group:'System',  action: () => { if(confirm('Reset all settings? Conversations are kept.')){ localStorage.clear(); location.reload(); } } },
     ];
 
@@ -15961,6 +17612,7 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
         div.innerHTML = parseMarkdown(md);
         display.appendChild(div); smoothScrollToBottom();
     }
+    window.addSystemMessage = addSystemMessage;
 
     // ═══════════════════════════════════════════════════════════
     // RELEASE NOTES & CHANGELOG
@@ -15970,7 +17622,230 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.15', date: 'April 2026', tag: 'latest',
+            version: 'v5.33', date: 'July 2026', tag: 'latest',
+            headline: 'Parallel Ship — golden paths, onboard, fusion, offline, RAG UX',
+            notes: [
+                { type:'new',  text:'SHIP LAYER — core/aether-ship.js golden paths + onboarding + offline banner' },
+                { type:'new',  text:'FUSION — last DR report persisted; → CODE implement on report + real handoff' },
+                { type:'new',  text:'GHOST→PR — PR set + Accept all on Ghost dock; changeset createFromGhosts alias' },
+                { type:'new',  text:'CHECKPOINTS — strip: Checkpoint · Restore · PR set · Ghosts' },
+                { type:'new',  text:'ONBOARDING — first-run wizard: preset → folder → moat loops' },
+                { type:'new',  text:'GOLDEN PATHS — /golden smoke suite; playbook auto-advance heuristics' },
+                { type:'new',  text:'RAG UX — /ragstats; mobile Skills/Moat panels; offline mode banner' },
+            ],
+        },
+        {
+            version: 'v5.32', date: 'July 2026', tag: '',
+            headline: 'Moat — provenance chain, integrity score, fusion handoffs',
+            notes: [
+                { type:'new',  text:'MOAT ENGINE — 8 defensive pillars scored live (zero-backend → fusion)' },
+                { type:'new',  text:'PROVENANCE LEDGER — chained local events: Ghost, research, skills, flights' },
+                { type:'new',  text:'TRUST PACK — exportable JSON audit bundle (keys redacted)' },
+                { type:'new',  text:'HANDOFFS — Research→Code playbook, Ghost→PR, Skill→Research' },
+                { type:'new',  text:'MOAT PANEL — score hero, pillar bars, recent chain (/moat)' },
+                { type:'new',  text:'HOOKS — auto-instrument Ghost propose + Kernel + Skill Runtime' },
+            ],
+        },
+        {
+            version: 'v5.31', date: 'July 2026', tag: '',
+            headline: 'Deep Research v3 — multi-angle, RAG, gap-fill, citations',
+            notes: [
+                { type:'new',  text:'DR v3 ENGINE — core/aether-deep-research.js angle planner + source ledger' },
+                { type:'new',  text:'MULTI-ANGLE SEARCH — depth-aware queries (not single-string spam)' },
+                { type:'new',  text:'RAG GROUNDING — hybrid retrieve when knowledge base has docs' },
+                { type:'new',  text:'GAP-FILL PASS — follow-up search from analysis open questions' },
+                { type:'new',  text:'CITATIONS — tiered source ledger (primary/institutional/web/discourse)' },
+                { type:'new',  text:'DISCOURSE step — optional X/news signal; intelligence brief format' },
+                { type:'new',  text:'UX — live finding chips, source count, edit focus, /research topic' },
+            ],
+        },
+        {
+            version: 'v5.30', date: 'July 2026', tag: '',
+            headline: 'Skill Runtime — playbooks, tool policy, CODE fusion, smoke',
+            notes: [
+                { type:'new',  text:'SKILL RUNTIME — workflow runner bar, step checklist, session resume' },
+                { type:'new',  text:'PLAYBOOKS — Aether Code bugfix/feature/refactor/review + domain packs' },
+                { type:'new',  text:'TOOL POLICY — prefer (default) or strict gate from active skill tools' },
+                { type:'new',  text:'CODE FUSION — coding skills auto-hint CODE mode + fs_patch/Ghost path' },
+                { type:'new',  text:'PRESETS — Builder / Researcher / Ops one-click skill packs' },
+                { type:'new',  text:'SLASH — /workflow · /skillpolicy · /skillsmoke · /skills preset' },
+                { type:'new',  text:'PROMPT — runtime injects preferred tools + active playbook checklist' },
+            ],
+        },
+        {
+            version: 'v5.29', date: 'July 2026', tag: '',
+            headline: 'Skills Flagship — schema v2, 39 new skills, full base upgrades',
+            notes: [
+                { type:'new',  text:'FLAGSHIP PACK — 39 curated skills (Aether Code, RAG Librarian, SRE, MCP Toolsmith…)' },
+                { type:'new',  text:'SCHEMA v2 — tier, version, bestFor, relatedSkills, safety, pack metadata' },
+                { type:'new',  text:'BASE ENRICHED — all 20+ original skills upgraded to flagship/pro with tool maps' },
+                { type:'new',  text:'RESOLVE BY NAME — activate/detail works for name and registry key (web-dev bugfix)' },
+                { type:'new',  text:'PANEL — tier filters, skill counts, flagship card chrome, related-skill detail' },
+                { type:'new',  text:'AUTO-DETECT — longer triggers score higher; tier breaks ties' },
+                { type:'perf', text:'core/aether-skills-pack.js — merge at boot, zero network' },
+            ],
+        },
+        {
+            version: 'v5.28', date: 'July 2026', tag: '',
+            headline: 'Security hardening — paths, shell, secrets, CSP, SSRF',
+            notes: [
+                { type:'new',  text:'SECURITY MODULE — path traversal block, shell allowlist, secret redaction' },
+                { type:'new',  text:'Expanded destructive gate — fs_patch, shell, github_commit, puter, email…' },
+                { type:'new',  text:'Sensitive path write block (.env, .git, keys); tool rate limit 40/10s' },
+                { type:'new',  text:'MCP HTTP localhost-only; private IP SSRF guard for scrape/fetch tools' },
+                { type:'new',  text:'CSP + X-Content-Type-Options + Referrer-Policy (meta + vercel.json)' },
+                { type:'fix',  text:'Removed eval() from code-block console; /security status command' },
+            ],
+        },
+        {
+            version: 'v5.27', date: 'July 2026', tag: '',
+            headline: 'RAG v2 — hybrid BM25+vector, smart chunks, citations, IndexedDB',
+            notes: [
+                { type:'new',  text:'HYBRID RETRIEVE — BM25 ∪ hash-vector fused with Reciprocal Rank Fusion' },
+                { type:'new',  text:'SMART CHUNKING — markdown headings + code fences respected; ~1.2k overlap slices' },
+                { type:'new',  text:'COLLECTIONS — default / project / session; /rag stats|search|clear|hybrid' },
+                { type:'new',  text:'CITATIONS UI — Sources chips under answers with path#chunk' },
+                { type:'new',  text:'INDEXEDDB — durable chunk store (migrates legacy aether_rag_docs)' },
+                { type:'new',  text:'Project index uses RAG v2 addFile; prompt injects citable context block' },
+            ],
+        },
+        {
+            version: 'v5.26', date: 'July 2026', tag: '',
+            headline: 'MCP Bridge — import tools/list, optional localhost HTTP',
+            notes: [
+                { type:'new',  text:'MCP BRIDGE — import MCP tool descriptors into TOOL_REGISTRY (no stdio)' },
+                { type:'new',  text:'Alias mode — MCP names map to native Aether tools when possible' },
+                { type:'new',  text:'HTTP JSON-RPC — optional local bridge endpoint tools/list + tools/call' },
+                { type:'new',  text:'/mcp — list · import JSON · fetch URL · remove server; + MCP in packs rail' },
+                { type:'new',  text:'Persisted MCP servers + Tool Pack toggles; all calls via callTool envelopes' },
+            ],
+        },
+        {
+            version: 'v5.25', date: 'July 2026', tag: '',
+            headline: 'Tool Runtime — unified protocol for all tool calls',
+            notes: [
+                { type:'new',  text:'TOOL RUNTIME — catalog with class, timeout, maxResult, OpenAI schemas for every tool' },
+                { type:'new',  text:'Structured envelopes — tool= name ok=true/false ms=N class=read|write|…' },
+                { type:'new',  text:'Arg normalization — string | JSON | path|||old|||new | OpenAI tool_calls → one path' },
+                { type:'new',  text:'Parser upgrade — multi-line [[tool:]] for all tools; fences; <tool_call>; dedupe' },
+                { type:'new',  text:'Parallel reads (batch of 4) + serial writes; per-turn tool budget; timeouts' },
+                { type:'new',  text:'Rich result cards + flight timeline ms; /tools history; Kernel logging' },
+            ],
+        },
+        {
+            version: 'v5.24', date: 'July 2026', tag: '',
+            headline: 'Code Pro Mobile+ — Swipe, Ghost FAB, Landscape',
+            notes: [
+                { type:'new',  text:'SWIPE TABS — left/right swipe between Chat · Files · Tools · Term · More' },
+                { type:'new',  text:'GHOST FAB — floating Review + Accept all / Open / Reject without leaving chat' },
+                { type:'new',  text:'SCROLL FAB — jump to latest message when scrolled up' },
+                { type:'new',  text:'LANDSCAPE SPLIT — chat + tools side-by-side on wide phones' },
+                { type:'new',  text:'CHROME AUTO-HIDE — scroll down densifies UI; double-tap brand to toggle' },
+                { type:'new',  text:'Haptics on tab change / accept / reject; keyboard-open densify mode' },
+            ],
+        },
+        {
+            version: 'v5.23', date: 'July 2026', tag: '',
+            headline: 'Code Pro Mobile — Tabbed touch shell',
+            notes: [
+                { type:'new',  text:'MOBILE CODE TABS — Chat · Files · Tools · Term · More (≤768px / coarse pointer)' },
+                { type:'new',  text:'Full-screen panels for tree, ghost/tools, terminal (no longer hidden on mobile)' },
+                { type:'new',  text:'Touch targets 44px+, horizontal pro-bar scroll, iOS 16px inputs (no zoom)' },
+                { type:'new',  text:'Soft-keyboard inset via visualViewport; safe-area padding for notched phones' },
+                { type:'new',  text:'More sheet — checkpoint, accept/reject, PR, verify, swarm, git, link folder' },
+                { type:'fix',  text:'Desktop layout unchanged; syncCodeAgentShell defers to mobile tab controller' },
+            ],
+        },
+        {
+            version: 'v5.22', date: 'July 2026', tag: '',
+            headline: 'Git Lite · Parallel Swarm · Pack Import',
+            notes: [
+                { type:'new',  text:'GIT LITE — read .git/HEAD via FS API; branch chip, /git status, /commitmsg draft' },
+                { type:'new',  text:'PARALLEL SWARM — /swarm --parallel runs 3 explore agents then plan; --review after edit' },
+                { type:'new',  text:'/pexplore — standalone triple parallel explore' },
+                { type:'new',  text:'PACK IMPORT — /packimport or + Import pack JSON (MCP-style manifests)' },
+                { type:'fix',  text:'/code slash targets btn-coding-mode; edit swarm auto-opens PR change set' },
+            ],
+        },
+        {
+            version: 'v5.21', date: 'July 2026', tag: '',
+            headline: 'Subagents · PR Change Sets · Tool Packs',
+            notes: [
+                { type:'new',  text:'SUBAGENTS — explore / plan / edit / review workers with tool loops (/sub · /swarm)' },
+                { type:'new',  text:'SWARM — explore→plan pipeline; /swarm goal --edit to chain an edit agent' },
+                { type:'new',  text:'PR CHANGE SETS — group Ghosts into reviewable PRs; Merge · Copy · Export .md (/pr)' },
+                { type:'new',  text:'TOOL PACKS — MCP-style enable/disable packs (filesystem, web, github, collab, puter…)' },
+                { type:'new',  text:'Pack gate — callTool blocks tools from disabled packs; /packs · /pack id' },
+            ],
+        },
+        {
+            version: 'v5.20', date: 'July 2026', tag: '',
+            headline: 'Aether Code Pro — Checkpoints, @mentions, Change-sets, Verify',
+            notes: [
+                { type:'new',  text:'CHECKPOINTS — auto snapshot before Ghost; /checkpoint · /restore for Cursor-class undo' },
+                { type:'new',  text:'@ MENTIONS — @file · @symbol · @blast · @memory · @plan with palette + context pins' },
+                { type:'new',  text:'CHANGE-SET BAR — Accept all · Reject all · Review · Verify · Blast radius chips' },
+                { type:'new',  text:'VERIFY LOOP — auto-detect npm test / pytest; optional auto-verify after Accept all' },
+                { type:'new',  text:'CODE MEMORY — sticky /memory notes + /memrule rules injected into coding system prompt' },
+                { type:'new',  text:'BLAST RADIUS — track every file touched this CODE session' },
+            ],
+        },
+        {
+            version: 'v5.19', date: 'July 2026', tag: '',
+            headline: 'Aether Code — Live Gutters, Hunk Accept, Parallel Reads',
+            notes: [
+                { type:'new',  text:'LIVE GUTTER — animated +/- line preview in the workspace editor when a Ghost lands (Gutter button)' },
+                { type:'new',  text:'HUNK ACCEPT — multi-hunk Ghost cards: Accept hunk / Reject hunk / Accept all' },
+                { type:'new',  text:'PARALLEL READS — read-only tools run concurrently; writes & shell stay serial' },
+                { type:'new',  text:'Editor sync — accepting a ghost/hunk updates the open editor buffer and clears gutters' },
+            ],
+        },
+        {
+            version: 'v5.18', date: 'July 2026', tag: '',
+            headline: 'Aether Code — Terminal Agent Shell + Surgical Patches',
+            notes: [
+                { type:'new',  text:'CODE AGENT SHELL — dedicated session rail, left tree, agent stream, tool-flight + Ghost right rail when CODE is on' },
+                { type:'new',  text:'fs_patch / search_replace — live insertions & subtractions (path|||old|||new or SEARCH/REPLACE fence)' },
+                { type:'new',  text:'GHOST HUNKS — patch cards show focused +/- hunks; tree marks pending files; docked into CODE rail' },
+                { type:'new',  text:'APPLY MODE — ask (ghost) · auto (write now) · plan-only; persists in localStorage' },
+                { type:'new',  text:'TOOL FLIGHT TIMELINE — every tool call as a status card in the right rail during CODE runs' },
+                { type:'new',  text:'Prefer-patch system prompt — agents instructed to surgical-edit instead of full-file rewrite' },
+                { type:'fix',  text:'callTool — structured single-arg FS routing; multi-line [[fs_patch:]] / [[fs_write:]] parsing' },
+            ],
+        },
+        {
+            version: 'v5.17', date: 'July 2026', tag: '',
+            headline: 'Neural OS — Kernel, Council, Soul, Graph, Ghost',
+            notes: [
+                { type:'new',  text:'KERNEL — syscall flight recorder for every tool call; exportable JSON timeline' },
+                { type:'new',  text:'MODEL COUNCIL — parallel multi-seat deliberation + speaker synthesis (COUNCIL / /council)' },
+                { type:'new',  text:'SOUL OS — live chrome chip, soul patches, /whoami, system-prompt injection' },
+                { type:'new',  text:'NEURAL THREAD GRAPH — constellation map of msg/agent/research/council nodes' },
+                { type:'new',  text:'GHOST COMMITS — Accept/Reject file writes in coding mode (Beast writes direct)' },
+                { type:'new',  text:'COGNITION THEATER — reasoning wave channel + orbiting tool glyphs' },
+                { type:'new',  text:'BOOT CINEMATIC — ship-computer system checks on session start' },
+                { type:'new',  text:'HEX HUD themes — Void / Plasma / Monolith (/theme)' },
+                { type:'new',  text:'Slash pack: /whoami /council /kernel /graph /theme /theater /ghost' },
+            ],
+        },
+        {
+            version: 'v5.16', date: 'July 2026', tag: '',
+            headline: 'Beast Mode — Consolidation & Autonomy',
+            notes: [
+                { type:'new',  text:'BEAST MODE — one-click max autonomy: exhaustive research profile, agent auto-run, tool permission gate bypass, system prompt bias toward action' },
+                { type:'new',  text:'Hero toolbar — AGENT · CODE · DEEP · WS · SETUP · BEAST first; secondary tools under MORE' },
+                { type:'new',  text:'core/ modules — version.js, safe-math.js, capabilities.js, beast-mode.js (zero-build modularisation path)' },
+                { type:'new',  text:'Capability banner — surfaces missing CDN modules so degraded mode is obvious' },
+                { type:'new',  text:'/beast and /version slash commands wired to single version source' },
+                { type:'security', text:'calculate tool: removed eval() — uses mathjs or restricted stack evaluator' },
+                { type:'fix',  text:'manifest.json filename (was "manifest .json" with a space — broke PWA install)' },
+                { type:'fix',  text:'Version single-source (core/version.js) — no more v5.14/v5.15/v5.16 drift across UI/SW/console' },
+                { type:'fix',  text:'logo.svg shipped for PWA icons and notifications' },
+                { type:'perf', text:'Service worker cache bumped to aether-v5.16' },
+            ],
+        },
+        {
+            version: 'v5.15', date: 'April 2026', tag: '',
             headline: 'The Ecosystem Release',
             notes: [
                 { type:'new',  text:'Smart Context Compression — auto-summarises old turns at 75% context usage, enabling infinite-length conversations' },
@@ -16104,7 +17979,8 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
     // your API keys, HOOK tokens, or workspace files through a
     // crafted system prompt. Until we have a sandboxed skill runtime
     // with explicit permission gates, every skill ships from source.
-    // We'd rather have 20 great skills than 200 dangerous ones.
+    // We'd rather have ~60 great skills than 600 dangerous ones.
+    // Schema v2 + flagship pack: core/aether-skills-pack.js
     // ═══════════════════════════════════════════════════════════
 
     const AETHER_SKILLS = {
@@ -17027,62 +18903,127 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
             visualizer: true,
         },
 
-        // ── DOCUMENTS SUPREMACY (synthetic skill — lazy-loaded ESM) ─
+        // ── DOCUMENTS SUPREMACY (engine skill — lazy ESM, full prompt hydrated on load) ─
         'documents-supremacy': {
             name: 'documents-supremacy',
             label: 'Documents Supremacy',
             icon: '📄',
             type: 'engine',
             category: 'utility',
-            description: 'Create, read, and rebuild Word (.docx), LibreOffice (.odt), PowerPoint (.pptx), Excel (.xlsx), and SQLite (.db) files entirely in the browser. 28 production templates. No server. No Node. Pure browser.',
-            triggers: ['document','docx','spreadsheet','presentation','excel','powerpoint','database'],
-            systemPrompt: `You are AETHER in Documents Supremacy mode. When asked to create any document, spreadsheet, presentation, or database, respond ONLY with a valid JSON spec. No markdown fences, no explanation. Raw JSON only.`,
-            skillMd: `# Documents Supremacy\nFormats: docx, odt, pptx, xlsx, sql, csv\n28 templates. All rendered browser-native.`,
+            description: 'Create, read, and rebuild Word, ODT, PowerPoint, Excel, SQLite, PDF, EPUB in-browser. Soft-parse + Kernel logs. Templates + convert.',
+            triggers: ['document','docx','spreadsheet','presentation','excel','powerpoint','database','pdf','epub','report','invoice','pitch deck','rebuild this'],
+            // Placeholder — replaced with DocumentsSupremacy.systemPrompt when module loads
+            systemPrompt: `You are Documents Supremacy. Create documents with raw JSON only (no fences).
+Types: document|presentation|spreadsheet|database|epub|markdown|convert|use-template.
+Formats: docx|odt|pdf|pptx|xlsx|sql. Include meta.filename. Prefer professional structure.`,
+            skillMd: `# Documents Supremacy v1.2\nFormats: docx, odt, pptx, xlsx, sql, pdf, epub, md\nSpec types: document, presentation, spreadsheet, database, epub, markdown, convert, use-template\nSoft-parse + Kernel flight logs.`,
             tools: [],
-            workflows: {},
-            visualizer: false,
+            workflows: {
+                create: { steps: ['Emit JSON spec', 'Execute in browser', 'Download artifact'], desc: 'Create a document artifact' },
+                rebuild: { steps: ['Upload file', 'Instruct rewrite', 'Generate new spec', 'Download'], desc: 'Rebuild an uploaded document' },
+            },
+            visualizer: true,
+            engine: true,
         },
 
-        // ── DISCOVERY SKILL (synthetic skill — lazy-loaded ESM) ─
+        // ── DISCOVERY SKILL (engine skill — lazy ESM, full prompt hydrated on load) ─
         discovery: {
             name: 'discovery',
             label: 'Discovery',
             icon: '🔍',
             type: 'engine',
             category: 'research',
-            description: 'Web search, image search, place maps, and weather — powered by Tavily, Serper, Brave, Open-Meteo, and Leaflet. No API key needed for maps and weather.',
-            triggers: ['search','web search','look up','find','images of','weather','map','places near','directions'],
-            systemPrompt: `You are AETHER in Discovery mode. You can search the web, find images, look up places, check weather, and show maps. When the user asks for any of these, respond ONLY with a valid JSON spec. No markdown fences, no explanation. Raw JSON only. Available actions: search, images, places, weather, route.`,
-            skillMd: `# Discovery Skill\nWeb search, image search, maps, weather.\nProviders: Tavily, Serper, Brave, Open-Meteo, Leaflet+OSM.`,
+            description: 'Web, news, images, maps, weather — Tavily/Serper/Brave + free OSM/Open-Meteo. Host key sync + Kernel logs.',
+            triggers: ['search','web search','look up','find','images of','weather','map','places near','directions','news about','headlines'],
+            systemPrompt: `You are the AETHER Discovery skill. When intent matches, respond ONLY with raw JSON (no fences).
+Actions: search|images|news|places|route|weather.
+Examples: {"action":"search","query":"..."} {"action":"weather","location":"Tokyo","units":"celsius"} {"action":"news","query":"...","freshness":"day"}`,
+            skillMd: `# Discovery Skill v1.2\nActions: search, images, news, places, route, weather\nNews: Brave → Serper → Tavily\nKeys sync from HOOKS · Kernel flight logs`,
             tools: [],
-            workflows: {},
+            workflows: {
+                research: { steps: ['Emit JSON action', 'Provider fallback', 'Render results'], desc: 'Search or discover' },
+            },
             visualizer: true,
+            engine: true,
         },
     };
+
+    // ── Flagship pack merge + schema v2 enrichments ──────────
+    // core/aether-skills-pack.js: 39+ new skills + upgrade base skills.
+    (function mergeSkillsFlagshipPack() {
+        try {
+            if (window.AETHER_SkillsPack && typeof window.AETHER_SkillsPack.mergeIntoRegistry === 'function') {
+                var _merge = window.AETHER_SkillsPack.mergeIntoRegistry(AETHER_SKILLS);
+                console.log('%c[AETHER Skills] flagship merge — added ' + _merge.added + ', enriched ' + _merge.enriched + ', total ' + _merge.total, 'color:#7F77DD');
+            } else if (window.AETHER_SkillsPack && window.AETHER_SkillsPack.enrichBaseSkills) {
+                window.AETHER_SkillsPack.enrichBaseSkills(AETHER_SKILLS);
+            }
+        } catch (e) {
+            console.warn('[AETHER Skills] pack merge failed', e);
+        }
+    })();
+
+    function resolveAetherSkill(idOrName) {
+        if (window.AETHER_SkillUtils && typeof window.AETHER_SkillUtils.resolveSkill === 'function') {
+            return window.AETHER_SkillUtils.resolveSkill(AETHER_SKILLS, idOrName);
+        }
+        if (window.AETHER_SkillsPack && typeof window.AETHER_SkillsPack.resolveSkill === 'function') {
+            return window.AETHER_SkillsPack.resolveSkill(AETHER_SKILLS, idOrName);
+        }
+        if (AETHER_SKILLS[idOrName]) return AETHER_SKILLS[idOrName];
+        for (const k of Object.keys(AETHER_SKILLS)) {
+            if (AETHER_SKILLS[k] && AETHER_SKILLS[k].name === idOrName) return AETHER_SKILLS[k];
+        }
+        return null;
+    }
 
     // ── Skill registry: active skill state (multi-skill) ────
     let activeSkills = [];
     const ACTIVE_SKILL_KEY = 'aether_active_skills';
-    try { const s=localStorage.getItem(ACTIVE_SKILL_KEY); if(s) activeSkills = JSON.parse(s).map(id=>AETHER_SKILLS[id]).filter(Boolean); } catch(e) {}
+    try {
+        const s = localStorage.getItem(ACTIVE_SKILL_KEY);
+        if (s) activeSkills = JSON.parse(s).map(function(id){ return resolveAetherSkill(id); }).filter(Boolean);
+    } catch(e) {}
 
     function isSkillActive(name) {
-        return activeSkills.some(function(s){ return s.name === name; });
+        return activeSkills.some(function(s){ return s.name === name || s === resolveAetherSkill(name); });
     }
 
     function activateSkill(skillId) {
-        const skill = AETHER_SKILLS[skillId];
+        const skill = resolveAetherSkill(skillId);
         if (!skill) return;
-        if (!isSkillActive(skillId)) {
+        if (!isSkillActive(skill.name)) {
             activeSkills.push(skill);
         }
         try { localStorage.setItem(ACTIVE_SKILL_KEY, JSON.stringify(activeSkills.map(function(s){ return s.name; }))); } catch(e) {}
-        showNotification('⬡ ' + skill.label + ' activated', 'success');
+        var tier = skill.tier ? ' · ' + skill.tier : '';
+        showNotification('⬡ ' + skill.label + ' activated' + tier, 'success');
+        try {
+            if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
+                AETHER_Moat.record('skill', {
+                    title: 'Skill activated: ' + skill.label,
+                    detail: skill.name + (skill.tier ? ' · ' + skill.tier : ''),
+                    meta: { skill: skill.name, tier: skill.tier },
+                });
+            }
+        } catch (_) {}
+        // CODE fusion: nudge coding mode + playbooks for coding skills
+        try {
+            if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.codeFusionHints) {
+                var fusion = AETHER_SkillRuntime.codeFusionHints(skill);
+                if (fusion && fusion.enableCodingMode && !state.codingMode) {
+                    showNotification('⌘ ' + skill.label + ' — enable CODE mode for Ghost + fs_patch', 'info');
+                }
+            }
+        } catch (_) {}
+        try { refreshSkillRuntimeBar(); } catch (_) {}
     }
 
     function deactivateSkill(skillId) {
         if (skillId) {
-            const skill = AETHER_SKILLS[skillId];
-            activeSkills = activeSkills.filter(function(s){ return s.name !== skillId; });
+            const skill = resolveAetherSkill(skillId);
+            const nm = skill ? skill.name : skillId;
+            activeSkills = activeSkills.filter(function(s){ return s.name !== nm && s.name !== skillId; });
             if (activeSkills.length === 0) {
                 try { localStorage.removeItem(ACTIVE_SKILL_KEY); } catch(e) {}
             } else {
@@ -17099,28 +19040,81 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     // ── Auto-detect skill from message ───────────────────────
     // When no skill is manually active, scan the user message for
     // skill trigger keywords and return the best-matching skill.
-    // Returns the detected skill or null.
+    // Prefer higher-tier skills on tie; require score ≥ 2.
     function detectSkillFromMessage(message) {
         if (!message) return null;
         const lower = message.toLowerCase();
-        let best = null, bestScore = 0;
-        for (const [key, skill] of Object.entries(AETHER_SKILLS)) {
-            const score = skill.triggers.reduce((acc, trigger) => acc + (lower.includes(trigger) ? 1 : 0), 0);
-            if (score > bestScore) { bestScore = score; best = skill; }
+        let best = null, bestScore = 0, bestTier = 0;
+        const tierRank = { engine: 4, flagship: 3, pro: 2, standard: 1 };
+        for (const skill of Object.values(AETHER_SKILLS)) {
+            if (!skill || !skill.triggers) continue;
+            const score = skill.triggers.reduce(function(acc, trigger) {
+                return acc + (lower.includes(trigger) ? (trigger.length >= 6 ? 2 : 1) : 0);
+            }, 0);
+            const tr = tierRank[skill.tier] || 1;
+            if (score > bestScore || (score === bestScore && score > 0 && tr > bestTier)) {
+                bestScore = score;
+                best = skill;
+                bestTier = tr;
+            }
         }
         return bestScore >= 2 ? best : null;
     }
 
     // ── Inject active skills into system prompt ───────────────
+    // Engine skills prefer their module SYSTEM_PROMPT (hydrated on load).
     function buildSkillSystemPrompt(basePrompt) {
         if (activeSkills.length === 0) return basePrompt;
         let result = basePrompt;
         activeSkills.forEach(function(skill) {
-            result += '\n\n---\n## ACTIVE SKILL: ' + skill.label + ' (' + skill.category + ')\n\n'
-                + skill.systemPrompt
-                + '\n\n## SKILL.MD\n\n' + skill.skillMd;
+            var prompt = skill.systemPrompt || '';
+            // Prefer live module prompts when engines are loaded
+            if (skill.name === 'discovery' && window.DiscoverySkill?.systemPrompt) {
+                prompt = window.DiscoverySkill.systemPrompt;
+            }
+            if (skill.name === 'documents-supremacy' && window.DocumentsSupremacy?.systemPrompt) {
+                prompt = window.DocumentsSupremacy.systemPrompt;
+            }
+            var md = skill.skillMd || '';
+            if (skill.name === 'discovery' && window.DiscoverySkill?.skillMd) md = window.DiscoverySkill.skillMd;
+            if (skill.name === 'documents-supremacy' && window.DocumentsSupremacy?.skillMd) md = window.DocumentsSupremacy.skillMd;
+            result += '\n\n---\n## ACTIVE SKILL: ' + skill.label + ' (' + skill.category + ') v'
+                + (skill.version || window.DiscoverySkill?.version || window.DocumentsSupremacy?.version || '')
+                + '\n\n' + prompt
+                + (md ? '\n\n## SKILL.MD\n\n' + md : '');
         });
         return result;
+    }
+
+    /** Sync Discovery keys from decrypted hooksConfig */
+    function syncDiscoveryKeysFromHooks() {
+        try {
+            if (typeof hooksConfig === 'object' && hooksConfig) {
+                window.__AETHER_HOOKS = {
+                    tavily: hooksConfig.tavily || hooksConfig.tavilyKey,
+                    serper: hooksConfig.serper || hooksConfig.serperKey,
+                    brave: hooksConfig.brave || hooksConfig.braveKey,
+                    openweather: hooksConfig.weather || hooksConfig.openweather || hooksConfig.openWeather || hooksConfig.owmKey,
+                };
+                window.hooksConfig = Object.assign({}, hooksConfig, {
+                    openweather: hooksConfig.weather || hooksConfig.openweather,
+                });
+                // Also push into Discovery KeyStore directly
+                const KS = window.DiscoverySkill?.KeyStore;
+                if (KS?.set) {
+                    if (window.__AETHER_HOOKS.tavily) KS.set('tavily', window.__AETHER_HOOKS.tavily);
+                    if (window.__AETHER_HOOKS.serper) KS.set('serper', window.__AETHER_HOOKS.serper);
+                    if (window.__AETHER_HOOKS.brave) KS.set('brave', window.__AETHER_HOOKS.brave);
+                    if (window.__AETHER_HOOKS.openweather) KS.set('openweather', window.__AETHER_HOOKS.openweather);
+                }
+            }
+            if (window.DiscoverySkill?.KeyStore?.syncFromHost) {
+                window.DiscoverySkill.KeyStore.syncFromHost();
+            }
+            if (window.AETHER_SkillUtils?.syncKeysFromHost && window.DiscoverySkill?.KeyStore) {
+                window.AETHER_SkillUtils.syncKeysFromHost(window.DiscoverySkill.KeyStore);
+            }
+        } catch (e) {}
     }
 
     window.AETHER_SKILLS = AETHER_SKILLS;
@@ -17131,12 +19125,12 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
 
     // ═══════════════════════════════════════════════════════════
     // SKILLS PANEL UI
-    // The dedicated Skills section in AETHER — renders all 20+
-    // curated skills + Documents Supremacy as a special doc skill.
-    // Filterable by category, searchable, activate/deactivate.
+    // Flagship curated registry (base + pack). Filterable by
+    // category / tier, searchable, activate/deactivate multi-skill.
     // ═══════════════════════════════════════════════════════════
 
     let _skillsCat = 'all';
+    let _skillsTier = 'all';
 
     function setSkillsCat(cat) {
         _skillsCat = cat;
@@ -17147,11 +19141,21 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     }
     window.setSkillsCat = setSkillsCat;
 
+    function setSkillsTier(tier) {
+        _skillsTier = tier || 'all';
+        document.querySelectorAll('.skills-tier-btn').forEach(function(b) {
+            b.classList.toggle('active', b.dataset.tier === _skillsTier);
+        });
+        renderSkillsPanel();
+    }
+    window.setSkillsTier = setSkillsTier;
+
     function renderSkillsPanel() {
         var grid = document.getElementById('skills-grid');
         var searchEl = document.getElementById('skills-search');
         var activeBar = document.getElementById('skills-active-bar');
         var activeName = document.getElementById('skills-active-name');
+        var countEl = document.getElementById('skills-count-label');
         if (!grid) return;
 
         // Clear any open detail pane and restore grid
@@ -17168,20 +19172,38 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
 
         var query = ((searchEl && searchEl.value) || '').toLowerCase().trim();
         var skills = Object.values(AETHER_SKILLS).filter(function(s) {
+            if (!s) return false;
             var catMatch = _skillsCat === 'all' || s.category === _skillsCat;
+            var tierMatch = _skillsTier === 'all' || (s.tier || 'standard') === _skillsTier;
             var searchMatch = !query
                 || s.label.toLowerCase().includes(query)
                 || s.description.toLowerCase().includes(query)
+                || (s.name||'').toLowerCase().includes(query)
+                || (s.tier||'').toLowerCase().includes(query)
                 || (s.triggers||[]).some(function(t){ return t.includes(query); })
-                || (s.systemPrompt||'').toLowerCase().includes(query);
-            return catMatch && searchMatch;
+                || (s.systemPrompt||'').toLowerCase().includes(query)
+                || (s.bestFor||[]).some(function(b){ return String(b).toLowerCase().includes(query); });
+            return catMatch && tierMatch && searchMatch;
         });
+
+        // Flagship / engine first, then label
+        var tierRank = { engine: 0, flagship: 1, pro: 2, standard: 3 };
+        skills.sort(function(a, b) {
+            var ta = tierRank[a.tier] != null ? tierRank[a.tier] : 4;
+            var tb = tierRank[b.tier] != null ? tierRank[b.tier] : 4;
+            if (ta !== tb) return ta - tb;
+            return (a.label || '').localeCompare(b.label || '');
+        });
+
+        if (countEl) {
+            countEl.textContent = skills.length + ' / ' + Object.keys(AETHER_SKILLS).length + ' skills';
+        }
 
         grid.innerHTML = '';
         skills.forEach(function(skill) {
             var isActive = activeSkills.some(function(s){ return s.name === skill.name; });
             var item = document.createElement('div');
-            item.className = 'skill-card' + (isActive ? ' active' : '');
+            item.className = 'skill-card' + (isActive ? ' active' : '') + (skill.tier === 'flagship' ? ' skill-tier-flagship' : '') + (skill.tier === 'engine' ? ' skill-tier-engine' : '');
             item.style.cursor = 'pointer';
             item.title = 'Click to view full details';
 
@@ -17194,6 +19216,8 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
             var wfLine = wfCount ? '<div class="skill-workflows-count">&#x29C6; ' + wfCount + ' workflow' + (wfCount>1?'s':'') + '</div>' : '';
             var skillType = skill.type === 'engine' ? 'ENGINE' : 'PROMPT';
             var skillTypeCls = skill.type === 'engine' ? 'skill-type-engine' : 'skill-type-prompt';
+            var tier = skill.tier || 'standard';
+            var tierCls = 'skill-tier-pill skill-tier-' + tier;
             var spSafe = (skill.systemPrompt||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
             var spPreview = spSafe.length > 90 ? spSafe.slice(0,90) + '…' : spSafe;
             var spId = 'sp-' + skill.name.replace(/[^a-z0-9-]/g,'');
@@ -17207,6 +19231,7 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
                 + '<span class="skill-card-icon">'+skill.icon+'</span>'
                 + '<span class="skill-card-name">'+skill.label+'</span>'
                 + '<span class="skill-cat-pill">'+skill.category+'</span>'
+                + '<span class="'+tierCls+'">'+tier+'</span>'
                 + '<span class="skill-type-pill '+skillTypeCls+'">'+skillType+'</span>'
                 + vizBadge + '</div>'
                 + '<div class="skill-card-desc">'+skill.description+'</div>'
@@ -17219,7 +19244,7 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
                 + '</div>';
 
             var detailBtn = item.querySelector('.skill-detail-btn');
-            var activateBtn = item.querySelector('.'+activeCls.split(' ')[0]);
+            var activateBtn = item.querySelector('.skill-activate-btn');
             var sName = skill.name;
 
             detailBtn.addEventListener('click', function(e){
@@ -17251,6 +19276,16 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     }
     window.openSkillsPanel = openSkillsPanel;
 
+    function openMoatPanel() {
+        if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.openPanel) {
+            try { AETHER_Moat.installHooks(); } catch (_) {}
+            AETHER_Moat.openPanel();
+        } else {
+            showNotification('Moat module offline', 'warn');
+        }
+    }
+    window.openMoatPanel = openMoatPanel;
+
     // ═══════════════════════════════════════════════════════════
     // DOCUMENTS SUPREMACY — Integration
     // Loads the DocumentsSupremacy module via dynamic ESM import
@@ -17264,42 +19299,86 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     async function loadDocumentsSupremacy() {
         if (_docsSupremacy) return _docsSupremacy;
         try {
-            // In production: these would be same-origin files deployed alongside AETHER
-            // For now: the skill can be loaded if the engine files are present
-            // Check if DocumentsSupremacy was pre-loaded by the page (via script tag)
             if (window.DocumentsSupremacy) {
                 _docsSupremacy = window.DocumentsSupremacy;
-                return _docsSupremacy;
+            } else {
+                const mod = await import('./documents-supremacy.js').catch(() => null);
+                if (mod?.default) {
+                    _docsSupremacy = mod.default;
+                    window.DocumentsSupremacy = _docsSupremacy;
+                }
             }
-            // Attempt ESM import from same origin (user deploys engines alongside AETHER)
-            const mod = await import('./documents-supremacy.js').catch(() => null);
-            if (mod?.default) {
-                _docsSupremacy = mod.default;
-                window.DocumentsSupremacy = _docsSupremacy;
-                return _docsSupremacy;
+            // Hydrate skill card with full engine prompt
+            if (_docsSupremacy && AETHER_SKILLS['documents-supremacy']) {
+                if (_docsSupremacy.systemPrompt) AETHER_SKILLS['documents-supremacy'].systemPrompt = _docsSupremacy.systemPrompt;
+                if (_docsSupremacy.skillMd) AETHER_SKILLS['documents-supremacy'].skillMd = _docsSupremacy.skillMd;
+                if (_docsSupremacy.version) AETHER_SKILLS['documents-supremacy'].version = _docsSupremacy.version;
             }
+            return _docsSupremacy;
         } catch(e) {
             console.warn('[AETHER] Documents Supremacy not available:', e.message);
         }
         return null;
     }
 
+    // Full type set — matches DocumentsSupremacy.SUPPORTED_SPEC_TYPES
+    const DOCS_SPEC_TYPES = ['document','presentation','spreadsheet','database','epub','markdown','convert','use-template'];
+
     // Try to execute a Documents Supremacy spec from LLM output
+    // Pipeline: soft/aggressive parse → model repair if truncated → execute
     async function tryDocumentsSupremacyRender(text, container) {
         if (!activeSkills.some(function(s){ return s.name === 'documents-supremacy'; })) return false;
         const ds = await loadDocumentsSupremacy();
         if (!ds) return false;
         try {
-            // Strip any code fences
-            const clean = text.replace(/```json\n?/g,'').replace(/```\n?/g,'').trim();
-            const spec = JSON.parse(clean);
-            if (!['document','presentation','spreadsheet','database'].includes(spec.type)) return false;
+            const su = window.AETHER_SkillUtils;
+            let spec = null;
+            let method = 'direct';
+
+            if (ds.extractSpecAsync) {
+                spec = await ds.extractSpecAsync(text, {
+                    callModel: typeof callAISimple === 'function' ? callAISimple : window.callAISimple,
+                    allowModelRepair: true,
+                });
+                method = 'async';
+            } else if (su?.parseWithRetry) {
+                const r = await su.parseWithRetry(text, {
+                    requireKey: 'type',
+                    skillHint: 'documents',
+                    callModel: typeof callAISimple === 'function' ? callAISimple : window.callAISimple,
+                });
+                spec = r?.spec || null;
+                method = r?.method || 'retry';
+            } else if (ds.extractSpec) {
+                spec = ds.extractSpec(text);
+            }
+
+            if (!spec) {
+                const clean = String(text).replace(/```(?:json)?\n?/gi,'').replace(/```/g,'').trim();
+                try { spec = JSON.parse(clean); } catch(e) { return false; }
+            }
+            const types = ds.SUPPORTED_SPEC_TYPES || DOCS_SPEC_TYPES;
+            if (!spec?.type || !types.includes(spec.type)) return false;
+
+            // Recovered drafts: subtle badge
             const vizEl = document.createElement('div');
-            vizEl.className = 'aether-viz-container';
+            vizEl.className = 'aether-viz-container aether-docs-viz';
+            if (method === 'aggressive' || method === 'model') {
+                const badge = document.createElement('div');
+                badge.className = 'skill-repair-badge';
+                badge.textContent = method === 'model'
+                    ? '⬡ Spec repaired by model (truncated stream)'
+                    : '⬡ Spec recovered from truncated JSON';
+                vizEl.appendChild(badge);
+            }
             await ds.execute(spec, vizEl);
             container.appendChild(vizEl);
+            try {
+                if (window.__aetherTrackGraph) window.__aetherTrackGraph('agent', 'Docs: ' + spec.type, { skill: 'documents-supremacy', method: method });
+            } catch(e) {}
             return true;
         } catch(e) {
+            console.warn('[AETHER] Documents render failed:', e.message);
             return false;
         }
     }
@@ -17319,14 +19398,20 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
         try {
             if (window.DiscoverySkill) {
                 _discoverySkill = window.DiscoverySkill;
-                return _discoverySkill;
+            } else {
+                const mod = await import('./discovery-skill.js').catch(() => null);
+                if (mod?.default) {
+                    _discoverySkill = mod.default;
+                    window.DiscoverySkill = _discoverySkill;
+                }
             }
-            const mod = await import('./discovery-skill.js').catch(() => null);
-            if (mod?.default) {
-                _discoverySkill = mod.default;
-                window.DiscoverySkill = _discoverySkill;
-                return _discoverySkill;
+            if (_discoverySkill && AETHER_SKILLS.discovery) {
+                if (_discoverySkill.systemPrompt) AETHER_SKILLS.discovery.systemPrompt = _discoverySkill.systemPrompt;
+                if (_discoverySkill.skillMd) AETHER_SKILLS.discovery.skillMd = _discoverySkill.skillMd;
+                if (_discoverySkill.version) AETHER_SKILLS.discovery.version = _discoverySkill.version;
             }
+            syncDiscoveryKeysFromHooks();
+            return _discoverySkill;
         } catch(e) {
             console.warn('[AETHER] Discovery Skill not available:', e.message);
         }
@@ -17338,47 +19423,224 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
         const ds = await loadDiscoverySkill();
         if (!ds) return false;
         try {
-            const spec = ds.extractSpec(text);
+            syncDiscoveryKeysFromHooks();
+            let spec = null;
+            let method = 'direct';
+
+            if (ds.extractSpecAsync) {
+                spec = await ds.extractSpecAsync(text, {
+                    callModel: typeof callAISimple === 'function' ? callAISimple : window.callAISimple,
+                    allowModelRepair: true,
+                });
+                method = 'async';
+            } else if (window.AETHER_SkillUtils?.parseWithRetry) {
+                const r = await window.AETHER_SkillUtils.parseWithRetry(text, {
+                    requireKey: 'action',
+                    skillHint: 'discovery',
+                    callModel: typeof callAISimple === 'function' ? callAISimple : window.callAISimple,
+                });
+                spec = r?.spec || null;
+                method = r?.method || 'retry';
+            } else if (ds.extractSpec) {
+                spec = ds.extractSpec(text);
+            }
+
             if (!spec || !spec.action) return false;
-            await ds.execute(spec, container);
+            const vizEl = document.createElement('div');
+            vizEl.className = 'aether-viz-container aether-discovery-viz';
+            if (method === 'aggressive' || method === 'model') {
+                const badge = document.createElement('div');
+                badge.className = 'skill-repair-badge';
+                badge.textContent = method === 'model'
+                    ? '⬡ Spec repaired by model (truncated stream)'
+                    : '⬡ Spec recovered from truncated JSON';
+                vizEl.appendChild(badge);
+            }
+            await ds.execute(spec, vizEl);
+            container.appendChild(vizEl);
+            try {
+                if (window.__aetherTrackGraph) window.__aetherTrackGraph('research', 'Discovery: ' + spec.action, { skill: 'discovery', method: method });
+                if (window.AETHER_Theater?.toolPulse) window.AETHER_Theater.toolPulse(spec.action, true);
+            } catch(e) {}
             return true;
         } catch(e) {
+            console.warn('[AETHER] Discovery render failed:', e.message);
+            try { if (window.AETHER_Theater?.toolPulse) window.AETHER_Theater.toolPulse('discovery', false); } catch(e2) {}
             return false;
         }
     }
     window._tryDiscoverySkillRender = tryDiscoverySkillRender;
 
+    // Preload engine modules when skill is activated (hydrate prompts)
+    const _origActivateSkill = activateSkill;
+    activateSkill = function(skillId) {
+        _origActivateSkill(skillId);
+        var sk = resolveAetherSkill(skillId);
+        var nm = sk ? sk.name : skillId;
+        if (nm === 'discovery' || nm === 'documents-supremacy') {
+            if (nm === 'discovery') loadDiscoverySkill();
+            if (nm === 'documents-supremacy') loadDocumentsSupremacy();
+        }
+    };
+    window.activateSkill = activateSkill;
+
+    // ── Skill Runtime host bridge ─────────────────────────────
+    function refreshSkillRuntimeBar() {
+        if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.renderRunnerBar) {
+            AETHER_SkillRuntime.renderRunnerBar('skill-runtime-bar');
+        }
+    }
+    window.refreshSkillRuntimeBar = refreshSkillRuntimeBar;
+
+    function runSkillWorkflow(skillName, workflowId, goal) {
+        if (typeof AETHER_SkillRuntime === 'undefined') {
+            showNotification('Skill Runtime offline', 'warn');
+            return;
+        }
+        // Ensure skill is active
+        var skill = resolveAetherSkill(skillName);
+        if (skill && !isSkillActive(skill.name)) activateSkill(skill.name);
+        var result = AETHER_SkillRuntime.startWorkflow(AETHER_SKILLS, skill ? skill.name : skillName, workflowId, {
+            goal: goal || '',
+        });
+        if (!result.ok) {
+            showNotification(result.error || 'Workflow failed', 'warn');
+            return;
+        }
+        // CODE fusion: turn on coding mode when playbook wants FS
+        if (result.codeFusion && !state.codingMode) {
+            try {
+                var btn = document.getElementById('btn-coding-mode');
+                if (btn) btn.click();
+                else state.codingMode = true;
+            } catch (_) {
+                state.codingMode = true;
+            }
+            showNotification('⌘ CODE mode on for playbook', 'info');
+        }
+        refreshSkillRuntimeBar();
+        // Close skills panel if open
+        try {
+            var modal = document.getElementById('skills-panel-modal');
+            if (modal) modal.classList.add('hidden');
+        } catch (_) {}
+        // Inject kickoff into composer and send
+        var ui = document.getElementById('user-input') || input;
+        if (ui) {
+            ui.value = result.message;
+            ui.style.height = 'auto';
+            try { ui.dispatchEvent(new Event('input')); } catch (_) {}
+        }
+        if (typeof sendMessage === 'function') {
+            // Defer so UI paints runner bar first
+            setTimeout(function () {
+                sendMessage();
+            }, 40);
+        } else {
+            showNotification('Playbook ready — press Send', 'success');
+        }
+    }
+    window.runSkillWorkflow = runSkillWorkflow;
+
+    function applySkillPreset(presetId) {
+        if (typeof AETHER_SkillRuntime === 'undefined') return;
+        var r = AETHER_SkillRuntime.applyPreset(AETHER_SKILLS, presetId, activateSkill);
+        if (r.ok) {
+            showNotification('Preset ' + presetId + ': ' + r.activated.length + ' skills', 'success');
+            if (typeof renderSkillsPanel === 'function') renderSkillsPanel();
+        } else {
+            showNotification(r.error || 'Preset failed', 'warn');
+        }
+    }
+    window.applySkillPreset = applySkillPreset;
+
+    function openSkillRuntimeHelp() {
+        var mode = typeof AETHER_SkillRuntime !== 'undefined' ? AETHER_SkillRuntime.getPolicyMode() : 'n/a';
+        var run = typeof AETHER_SkillRuntime !== 'undefined' ? AETHER_SkillRuntime.getRun() : null;
+        var md =
+            '**Skill Runtime v' +
+            (typeof AETHER_SkillRuntime !== 'undefined' ? AETHER_SkillRuntime.version : '?') +
+            '**\n\n' +
+            '- Tool policy: **' +
+            mode +
+            '** — `/skillpolicy prefer|strict|off`\n' +
+            '- Run playbook: `/workflow aether-code bugfix fix the null crash`\n' +
+            '- Or open SKILLS → Details → **Run** on a workflow\n' +
+            '- Presets: Builder / Researcher / Ops in the Skills panel\n' +
+            '- Golden tests: `/skillsmoke`\n\n' +
+            (run
+                ? 'Active run: `' + run.skillName + '/' + run.workflowId + '` step ' + (run.stepIndex + 1)
+                : 'No playbook running.');
+        addSystemMessage(md);
+    }
+    window.openSkillRuntimeHelp = openSkillRuntimeHelp;
+
+    try {
+        if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.on) {
+            AETHER_SkillRuntime.on(function () {
+                refreshSkillRuntimeBar();
+            });
+        }
+        // Restore runner bar if session had a run
+        setTimeout(refreshSkillRuntimeBar, 200);
+    } catch (_) {}
+
     // ─── SKILL DETAIL PANE ───────────────────────────────────
     function openSkillDetail(skillName) {
-        var skill = AETHER_SKILLS[skillName];
+        var skill = resolveAetherSkill(skillName);
         if (!skill) return;
         var grid = document.getElementById('skills-grid');
         if (!grid) return;
         var oldDetail = document.getElementById('skill-detail-pane');
         if (oldDetail) oldDetail.remove();
 
-        var isActive = activeSkills.some(function(s){ return s.name === skillName; });
+        var isActive = activeSkills.some(function(s){ return s.name === skill.name; });
         var detail = document.createElement('div');
         detail.id = 'skill-detail-pane';
         detail.className = 'skill-detail-pane';
 
         var spSafe = (skill.systemPrompt||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-        if (spSafe.length > 1600) spSafe = spSafe.slice(0,1600) + '\n...';
+        if (spSafe.length > 2400) spSafe = spSafe.slice(0,2400) + '\n...';
         var smSafe = (skill.skillMd||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-        var catLine = skill.category + (skill.visualizer ? ' · Visualizer' : '') + ((skill.mcpHooks||[]).length ? ' · MCP' : '');
+        var catLine = skill.category
+            + (skill.tier ? ' · ' + skill.tier : '')
+            + (skill.version ? ' · v' + skill.version : '')
+            + (skill.visualizer ? ' · Visualizer' : '')
+            + ((skill.mcpHooks||[]).length ? ' · MCP' : '')
+            + (skill.safety ? ' · ' + skill.safety : '');
         var activeLbl = isActive ? 'Deactivate' : 'Activate This Skill';
         var activeCls = isActive ? 'skill-activate-btn deactivate' : 'skill-activate-btn';
 
         var trigHtml = (skill.triggers||[]).map(function(t){ return '<span class="skill-trigger-tag">'+t+'</span>'; }).join('');
         var toolsHtml = (skill.tools||[]).map(function(t){ return '<span class="skill-tool-detail-tag">'+t+'</span>'; }).join('')
                       + (skill.mcpHooks||[]).map(function(h){ return '<span class="skill-tool-detail-tag mcp">'+h+' (MCP)</span>'; }).join('');
-        var wfHtml = Object.entries(skill.workflows||{}).map(function(entry){
-            var id = entry[0], wf = entry[1];
-            var steps = wf.steps.map(function(s,i){ return '<span class="skill-step">'+(i+1)+'. '+s+'</span>'; }).join('');
-            return '<div class="skill-workflow-item"><div class="skill-workflow-name">'+id+'</div>'
-                 + '<div class="skill-workflow-desc">'+wf.desc+'</div>'
+        // Merge skill.workflows + Skill Runtime playbooks
+        var wfList = (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.listWorkflows)
+            ? AETHER_SkillRuntime.listWorkflows(skill)
+            : Object.keys(skill.workflows||{}).map(function(id){
+                return { id: id, desc: skill.workflows[id].desc, steps: skill.workflows[id].steps||[], source: 'skill' };
+            });
+        var wfHtml = wfList.map(function(wf){
+            var steps = (wf.steps||[]).map(function(s,i){ return '<span class="skill-step">'+(i+1)+'. '+s+'</span>'; }).join('');
+            var src = wf.source === 'playbook' ? ' <span class="skill-wf-src">playbook</span>' : '';
+            var fusion = wf.codeFusion ? ' <span class="skill-wf-src code">CODE</span>' : '';
+            return '<div class="skill-workflow-item" data-wf="'+wf.id+'">'
+                 + '<div class="skill-workflow-head"><div class="skill-workflow-name">'+wf.id+src+fusion+'</div>'
+                 + '<button type="button" class="skill-run-wf-btn" data-skill="'+skill.name+'" data-wf="'+wf.id+'">▶ Run</button></div>'
+                 + '<div class="skill-workflow-desc">'+(wf.desc||'')+'</div>'
                  + '<div class="skill-workflow-steps">'+steps+'</div></div>';
         }).join('');
+        var bestHtml = (skill.bestFor||[]).map(function(b){ return '<span class="skill-trigger-tag">'+b+'</span>'; }).join('');
+        var relHtml = (skill.relatedSkills||[]).map(function(r){ return '<span class="skill-tool-detail-tag">'+r+'</span>'; }).join('');
+        var policyHint = '';
+        try {
+            if (typeof AETHER_SkillRuntime !== 'undefined') {
+                var pref = AETHER_SkillRuntime.collectPreferredTools([skill]);
+                if (pref.length) policyHint = '<div class="skill-detail-section"><div class="skill-detail-section-title">Runtime preferred tools</div><div class="skill-tools-list">'
+                    + pref.slice(0,16).map(function(t){ return '<span class="skill-tool-detail-tag">'+t+'</span>'; }).join('')
+                    + '</div></div>';
+            }
+        } catch(_) {}
 
         var html = '<div class="skill-detail-header">'
             + '<button class="skill-detail-back" id="sdBack">&larr; Back to Skills</button>'
@@ -17389,9 +19651,12 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
             + '<div class="skill-detail-category">'+catLine+'</div></div></div>'
             + '<div class="skill-detail-desc">'+skill.description+'</div>';
 
+        if (bestHtml)  html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Best for</div><div class="skill-triggers-cloud">'+bestHtml+'</div></div>';
         if (trigHtml)  html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Auto-activation keywords</div><div class="skill-triggers-cloud">'+trigHtml+'</div></div>';
         if (toolsHtml) html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Tools &amp; Integrations</div><div class="skill-tools-list">'+toolsHtml+'</div></div>';
-        if (wfHtml)    html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Workflows</div>'+wfHtml+'</div>';
+        if (policyHint) html += policyHint;
+        if (relHtml)   html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Related skills</div><div class="skill-tools-list">'+relHtml+'</div></div>';
+        if (wfHtml)    html += '<div class="skill-detail-section"><div class="skill-detail-section-title">Playbooks &amp; Workflows (Skill Runtime)</div>'+wfHtml+'</div>';
         html += '<div class="skill-detail-section"><div class="skill-detail-section-title">SKILL.md</div><pre class="skill-skillmd-pre">'+smSafe+'</pre></div>';
         html += '<div class="skill-detail-section"><div class="skill-detail-section-title">System Prompt (injected when active)</div><pre class="skill-prompt-pre">'+spSafe+'</pre></div>';
         detail.innerHTML = html;
@@ -17404,14 +19669,24 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
             grid.style.display = 'grid';
         };
         document.getElementById('sdActivate').onclick = function() {
-            if (activeSkills.some(function(s){ return s.name === skillName; })) deactivateSkill(skillName);
-            else activateSkill(skillName);
+            if (activeSkills.some(function(s){ return s.name === skill.name; })) deactivateSkill(skill.name);
+            else activateSkill(skill.name);
             detail.remove();
             grid.style.display = 'grid';
             renderSkillsPanel();
         };
+        detail.querySelectorAll('.skill-run-wf-btn').forEach(function(btn) {
+            btn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                var sn = btn.getAttribute('data-skill');
+                var wf = btn.getAttribute('data-wf');
+                var goal = window.prompt('Optional goal for this playbook (or leave blank):', '') || '';
+                runSkillWorkflow(sn, wf, goal);
+            });
+        });
     }
     window.openSkillDetail = openSkillDetail;
+    window.resolveAetherSkill = resolveAetherSkill;
 
     // ─── RAG KNOWLEDGE BASE VIEWER ───────────────────────────
     function openRagViewer() {
@@ -17596,9 +19871,124 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     }
     if(attachScrape) attachScrape.addEventListener('click',async()=>{ attachMenu.classList.add('hidden'); const url=await prompt('Enter URL to scrape:'); if(url&&url.trim()) handleWebScrape(url.trim()); });
 
+    // ── Theme picker (CFG → Appearance) ──────────────────────
+    const THEME_META = {
+        void:     { name: 'Void',       desc: 'Classic cyberpunk cyan',  c1: '#020308', c2: '#0a1520', accent: '#00f3ff' },
+        plasma:   { name: 'Plasma',     desc: 'Magenta neon night',      c1: '#0a0314', c2: '#1a0530', accent: '#ff2bd6' },
+        monolith: { name: 'Monolith',   desc: 'Monochrome steel',        c1: '#0b0d10', c2: '#1a1e24', accent: '#e8ecf1' },
+        ivory:    { name: 'Warm Ivory', desc: 'Calm paper for mortals',  c1: '#F5F1EB', c2: '#E8DFD0', accent: '#8B5A2B' },
+    };
+
+    function renderThemePicker() {
+        const host = document.getElementById('theme-picker');
+        if (!host) return;
+        const themes = (typeof AETHER_Themes !== 'undefined' && AETHER_Themes.list)
+            ? AETHER_Themes.list()
+            : Object.keys(THEME_META).map(id => ({ id, label: THEME_META[id].name }));
+        const cur = (typeof AETHER_Themes !== 'undefined' && AETHER_Themes.current)
+            ? AETHER_Themes.current()
+            : (localStorage.getItem('aether_theme_v1') || 'void');
+
+        host.innerHTML = themes.map(t => {
+            const m = THEME_META[t.id] || { name: t.label || t.id, desc: '', c1: '#111', c2: '#222', accent: '#0ff' };
+            const active = t.id === cur ? ' active' : '';
+            return `<button type="button" class="theme-card${active}" data-theme="${t.id}" role="option" aria-selected="${t.id === cur}">
+                <span class="theme-card-swatch" style="--tc1:${m.c1};--tc2:${m.c2};--tc-accent:${m.accent}"></span>
+                <span class="theme-card-name">${m.name}</span>
+                <span class="theme-card-desc">${m.desc}</span>
+            </button>`;
+        }).join('');
+
+        host.querySelectorAll('.theme-card').forEach(card => {
+            card.addEventListener('click', () => {
+                const id = card.getAttribute('data-theme');
+                if (typeof AETHER_Themes !== 'undefined') {
+                    AETHER_Themes.apply(id);
+                } else {
+                    document.documentElement.setAttribute('data-aether-theme', id);
+                    localStorage.setItem('aether_theme_v1', id);
+                }
+                // Theme-aware pane copy refresh
+                if (typeof window._apOnThemeChange === 'function') window._apOnThemeChange();
+                // Ivory: gently enable compact + calm if user hasn't overridden
+                if (id === 'ivory') {
+                    try {
+                        if (localStorage.getItem('aether_pane_compact') === null) applyPaneCompact(true);
+                        if (localStorage.getItem('aether_wave_calm') === null) applyWaveCalmIdle(true);
+                    } catch (e) {}
+                }
+                renderThemePicker();
+                const label = (THEME_META[id] && THEME_META[id].name) || id;
+                showNotification('Theme: ' + label + (id === 'ivory' ? ' — paper mode' : ''), id === 'ivory' ? 'success' : 'info');
+            });
+        });
+    }
+
+    function applyWaveEnabled(on) {
+        state.waveEnabled = on !== false;
+        const pane = document.getElementById('aether-pane');
+        if (pane) pane.classList.toggle('wave-disabled', !state.waveEnabled);
+        try { localStorage.setItem('aether_wave_enabled', state.waveEnabled ? '1' : '0'); } catch (e) {}
+    }
+    function applyWaveCalmIdle(on) {
+        state.waveCalmIdle = on !== false;
+        try { localStorage.setItem('aether_wave_calm', state.waveCalmIdle ? '1' : '0'); } catch (e) {}
+    }
+    function applyPaneCompact(on) {
+        state.paneCompact = !!on;
+        const pane = document.getElementById('aether-pane');
+        if (pane) pane.classList.toggle('pane-compact', state.paneCompact);
+        try { localStorage.setItem('aether_pane_compact', state.paneCompact ? '1' : '0'); } catch (e) {}
+    }
+    // Restore pane/wave preferences
+    try {
+        applyWaveEnabled(localStorage.getItem('aether_wave_enabled') !== '0');
+        applyWaveCalmIdle(localStorage.getItem('aether_wave_calm') !== '0'); // default ON
+        applyPaneCompact(localStorage.getItem('aether_pane_compact') === '1'); // default OFF
+        // Ivory defaults: prefer compact if never set
+        if (document.documentElement.getAttribute('data-aether-theme') === 'ivory'
+            && localStorage.getItem('aether_pane_compact') === null) {
+            applyPaneCompact(true);
+        }
+    } catch (e) {
+        applyWaveEnabled(true);
+        applyWaveCalmIdle(true);
+        applyPaneCompact(false);
+    }
+
     // Settings
-    if(btnSettings) btnSettings.addEventListener('click',()=>settingsModal?.classList.remove('hidden'));
+    if(btnSettings) btnSettings.addEventListener('click',()=>{
+        settingsModal?.classList.remove('hidden');
+        renderThemePicker();
+        const wt = document.getElementById('wave-enabled-toggle');
+        if (wt) wt.checked = state.waveEnabled !== false;
+        const ct = document.getElementById('wave-calm-toggle');
+        if (ct) ct.checked = state.waveCalmIdle !== false;
+        const pt = document.getElementById('pane-compact-toggle');
+        if (pt) pt.checked = !!state.paneCompact;
+    });
     if(settingsClose) settingsClose.addEventListener('click',()=>settingsModal?.classList.add('hidden'));
+    const waveToggleEl = document.getElementById('wave-enabled-toggle');
+    if (waveToggleEl) {
+        waveToggleEl.addEventListener('change', e => {
+            applyWaveEnabled(e.target.checked);
+            showNotification('AETHER Wave ' + (e.target.checked ? 'ON' : 'OFF'), 'info');
+        });
+    }
+    const waveCalmEl = document.getElementById('wave-calm-toggle');
+    if (waveCalmEl) {
+        waveCalmEl.addEventListener('change', e => {
+            applyWaveCalmIdle(e.target.checked);
+            showNotification('Calm idle wave ' + (e.target.checked ? 'ON' : 'OFF'), 'info');
+        });
+    }
+    const paneCompactEl = document.getElementById('pane-compact-toggle');
+    if (paneCompactEl) {
+        paneCompactEl.addEventListener('change', e => {
+            applyPaneCompact(e.target.checked);
+            showNotification('Compact pane ' + (e.target.checked ? 'ON' : 'OFF'), 'info');
+        });
+    }
     if(temperatureSlider) temperatureSlider.addEventListener('input',e=>{state.temperature=parseFloat(e.target.value);updateCustomSlider(e.target.value);saveState();});
     if(topkInput) topkInput.addEventListener('input',e=>{state.topK=parseInt(e.target.value);if(topkValue)topkValue.textContent=state.topK;if(topkDisplay)topkDisplay.textContent=state.topK;saveState();});
     if(cotToggle) cotToggle.addEventListener('change',e=>{state.coTEnabled=e.target.checked;if(cotIndicator)cotIndicator.style.display=state.coTEnabled?'flex':'none';saveState();showNotification('CoT '+(state.coTEnabled?'ON':'OFF'),'success');});
@@ -17610,7 +20000,16 @@ CAP theorem, BASE vs ACID, Saga pattern, Outbox pattern
     const metricsToggleEl=$('metrics-toggle');
     if(metricsToggleEl) metricsToggleEl.addEventListener('change',e=>{state.showMetrics=e.target.checked;applyMetricsVisibility();saveState();showNotification('Metrics '+(state.showMetrics?'visible':'hidden'),'info');});
     const vectorToggleEl=$('vector-toggle');
-    if(vectorToggleEl) vectorToggleEl.addEventListener('change',async e=>{state.vectorRagEnabled=e.target.checked;saveState();if(state.vectorRagEnabled&&!state.oramaDb) await initOrama();showNotification('Vector RAG '+(state.vectorRagEnabled?'ON':'OFF'),'success');});
+    if(vectorToggleEl) vectorToggleEl.addEventListener('change',async e=>{
+        state.vectorRagEnabled=e.target.checked;saveState();
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            AETHER_RAGv2.setSettings({ hybrid: !!state.vectorRagEnabled });
+            showNotification('RAG hybrid '+(state.vectorRagEnabled?'ON':'OFF'),'success');
+        } else {
+            if(state.vectorRagEnabled&&!state.oramaDb) await initOrama();
+            showNotification('Vector RAG '+(state.vectorRagEnabled?'ON':'OFF'),'success');
+        }
+    });
 
     // SOUL & Reflection settings
     const reflectionToggleEl=$('reflection-toggle');
@@ -17800,6 +20199,134 @@ Format the final summary as a single, clean text block divided into the five lab
     // ── Text Editor modal ────────────────────────────────────
     let _editorFile = null, _editorIsFs = false, _editorDirty = false, _editorWrap = false;
 
+    // ── Live ghost gutter (insertions / subtractions in editor) ──
+    let _liveGutterDetail = null;
+    let _liveGutterVisible = false;
+
+    function renderLiveGutterPanel(detail) {
+        const panel = document.getElementById('ws-editor-live-gutter');
+        const badge = document.getElementById('ws-editor-gutter-badge');
+        const toggle = document.getElementById('ws-editor-toggle-gutter');
+        if (!panel) return;
+        if (!detail || detail.clear) {
+            panel.innerHTML = '';
+            panel.style.display = 'none';
+            panel.setAttribute('aria-hidden', 'true');
+            if (badge) badge.style.display = 'none';
+            if (toggle) toggle.style.display = 'none';
+            _liveGutterDetail = null;
+            _liveGutterVisible = false;
+            return;
+        }
+        _liveGutterDetail = detail;
+        let ops = detail.ops;
+        if (!ops && typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.lineOps) {
+            ops = AETHER_Ghost.lineOps(detail.before || '', detail.after || '');
+        }
+        ops = ops || [];
+        // Cap for performance; prefer showing changed lines + light context
+        const maxLines = 400;
+        let html = '';
+        let shown = 0;
+        let animIdx = 0;
+        for (let i = 0; i < ops.length && shown < maxLines; i++) {
+            const op = ops[i];
+            // Skip long equal runs (keep 1 context around changes)
+            if (op.type === 'eq') {
+                const prevCh = i > 0 && ops[i - 1].type !== 'eq';
+                const nextCh = i + 1 < ops.length && ops[i + 1].type !== 'eq';
+                if (!prevCh && !nextCh && shown > 2) continue;
+            }
+            const mark = op.type === 'add' ? '+' : (op.type === 'del' ? '−' : ' ');
+            const ln = op.type === 'del' ? (op.oldLn || '') : (op.newLn || op.oldLn || '');
+            const delay = Math.min(animIdx * 12, 600);
+            html += '<div class="ws-lg-line ' + op.type + '" style="animation-delay:' + delay + 'ms">' +
+                '<span class="ws-lg-mark">' + mark + '</span>' +
+                '<span class="ws-lg-num">' + ln + '</span>' +
+                '<span class="ws-lg-text">' + escapeHtml(op.text || '') + '</span></div>';
+            shown++;
+            animIdx++;
+        }
+        if (ops.length > shown) {
+            html += '<div class="ws-lg-line eq"><span class="ws-lg-mark"> </span><span class="ws-lg-num"></span><span class="ws-lg-text">… ' + (ops.length - shown) + ' more</span></div>';
+        }
+        panel.innerHTML = html || '<div class="ws-lg-line eq"><span class="ws-lg-text">No line delta</span></div>';
+        if (badge) {
+            badge.style.display = '';
+            const adds = ops.filter(o => o.type === 'add').length;
+            const dels = ops.filter(o => o.type === 'del').length;
+            badge.textContent = 'ghost +' + adds + '/−' + dels;
+        }
+        if (toggle) toggle.style.display = '';
+        // Auto-show when coding mode or path matches open file
+        const show = _liveGutterVisible || (_editorFile && detail.path === _editorFile) || state.codingMode;
+        if (show) {
+            panel.style.display = 'block';
+            panel.setAttribute('aria-hidden', 'false');
+            _liveGutterVisible = true;
+        }
+    }
+
+    window.__aetherApplyLiveGutter = function (detail) {
+        if (!detail) return;
+        if (detail.clear) {
+            if (!_liveGutterDetail || _liveGutterDetail.path === detail.path) {
+                renderLiveGutterPanel({ clear: true });
+            }
+            return;
+        }
+        // If editor open for this path, paint gutter; always store for Gutter button
+        renderLiveGutterPanel(detail);
+        if (_editorFile === detail.path) {
+            const panel = document.getElementById('ws-editor-live-gutter');
+            if (panel) {
+                panel.style.display = 'block';
+                _liveGutterVisible = true;
+            }
+        }
+    };
+
+    window.__aetherSyncEditorAfterGhost = function (path, content) {
+        if (_editorFile === path) {
+            const ta = document.getElementById('ws-editor-textarea');
+            if (ta) {
+                ta.value = content != null ? content : ta.value;
+                _editorDirty = false;
+                const dirtyEl = document.getElementById('ws-editor-dirty');
+                if (dirtyEl) dirtyEl.style.display = 'none';
+            }
+            renderLiveGutterPanel({ clear: true });
+        }
+    };
+
+    window.__aetherOpenEditorForGhost = async function (item) {
+        if (!item || !item.path) return;
+        let content = item.before || '';
+        try {
+            if (codingFolderHandle && typeof fsFolderRead === 'function') {
+                const r = await fsFolderRead(item.path);
+                if (r && !String(r).startsWith('fs_read error') && !String(r).startsWith('No folder')) content = r;
+            }
+        } catch (_) {}
+        window.openWorkspaceEditor(item.path, content, !!codingFolderHandle);
+        setTimeout(function () {
+            if (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.emitGutter) AETHER_Ghost.emitGutter(item);
+            else renderLiveGutterPanel({
+                path: item.path,
+                before: item.before,
+                after: item.after,
+                ops: (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.lineOps)
+                    ? AETHER_Ghost.lineOps(item.before, item.after) : null,
+            });
+            const panel = document.getElementById('ws-editor-live-gutter');
+            if (panel) { panel.style.display = 'block'; _liveGutterVisible = true; }
+        }, 80);
+    };
+
+    document.addEventListener('aether-ghost-gutter', function (ev) {
+        if (ev && ev.detail) window.__aetherApplyLiveGutter(ev.detail);
+    });
+
     window.openWorkspaceEditor = function(filename, content, isFs = false) {
         _editorFile = filename; _editorIsFs = isFs; _editorDirty = false;
         const modal    = document.getElementById('ws-editor-modal');
@@ -17816,6 +20343,19 @@ Format the final summary as a single, clean text block divided into the five lab
         modal.classList.remove('hidden');
         textarea.focus();
         updateMeta();
+        // Re-apply pending ghost gutter for this file if any
+        try {
+            if (typeof AETHER_Ghost !== 'undefined' && AETHER_Ghost.loadQueue) {
+                const pend = AETHER_Ghost.loadQueue().find(function (x) {
+                    return x.status === 'pending' && x.path === filename;
+                });
+                if (pend) {
+                    if (AETHER_Ghost.emitGutter) AETHER_Ghost.emitGutter(pend);
+                } else {
+                    renderLiveGutterPanel({ clear: true });
+                }
+            }
+        } catch (_) {}
         textarea.oninput = () => { if (!_editorDirty) { _editorDirty = true; if (dirtyEl) dirtyEl.style.display = ''; } updateMeta(); };
         textarea.onkeyup = textarea.onclick = () => {
             if (!cursorEl) return;
@@ -17832,6 +20372,16 @@ Format the final summary as a single, clean text block divided into the five lab
             if (charsEl) charsEl.textContent = textarea.value.length.toLocaleString() + ' chars';
         }
     };
+
+    // Toggle live gutter in editor
+    document.getElementById('ws-editor-toggle-gutter')?.addEventListener('click', () => {
+        const panel = document.getElementById('ws-editor-live-gutter');
+        if (!panel) return;
+        if (!_liveGutterDetail) return;
+        _liveGutterVisible = !_liveGutterVisible;
+        panel.style.display = _liveGutterVisible ? 'block' : 'none';
+        panel.setAttribute('aria-hidden', _liveGutterVisible ? 'false' : 'true');
+    });
 
     async function saveEditorFile() {
         const textarea = document.getElementById('ws-editor-textarea');
@@ -18256,6 +20806,14 @@ Format the final summary as a single, clean text block divided into the five lab
         const overlay = document.getElementById('onboarding-overlay');
         if(overlay){ overlay.classList.remove('visible'); setTimeout(()=>overlay.remove(),400); }
         showNotification(`AETHER personalised as ${persona.name} 🧬`, 'success');
+        // Beast Mode onboarding: if no API key yet, open SETUP immediately
+        const needsSetup = !(apiConfig && (apiConfig.apiKey || (apiConfig.provider === 'local' && apiConfig.endpoint)));
+        if (needsSetup) {
+            setTimeout(() => {
+                document.getElementById('btn-setup')?.click();
+                showNotification('Connect a local model or paste an API key — then you are live.', 'info', 5000);
+            }, 600);
+        }
     };
 
     // Inject persona into system prompt
@@ -18508,10 +21066,92 @@ Format the final summary as a single, clean text block divided into the five lab
     initEasterEgg();
     wireAttachFsFile();
 
+    // ── Beast Mode restore + wire button ──────────────────────
+    (function initBeastMode() {
+        const btn = document.getElementById('btn-beast-mode');
+        const ctx = {
+            state,
+            saveState: typeof saveState === 'function' ? saveState : () => {},
+            showNotification: typeof showNotification === 'function' ? showNotification : () => {},
+        };
+        if (typeof AETHER_Beast !== 'undefined') {
+            if (AETHER_Beast.isEnabled()) AETHER_Beast.set(true, ctx);
+            if (btn) {
+                btn.addEventListener('click', () => AETHER_Beast.toggle(ctx));
+            }
+        }
+        // Beast Mode injects into system prompts via getBeastPromptAddon()
+        window.getBeastPromptAddon = () =>
+            (typeof AETHER_Beast !== 'undefined' ? AETHER_Beast.systemPromptAddon() : '');
+    })();
+
+    // ── Neural OS bridges (advanced core modules) ─────────────
+    window.callAISimple = callAISimple;
+    window.showNotification = showNotification;
+    window.addSystemMessage = addSystemMessage;
+    window.writeFile = typeof writeFile === 'function' ? writeFile : window.writeFile;
+    window.fsFolderWrite = fsFolderWrite;
+    window.openSoulViewer = openSoulViewer;
+    window.__AETHER_TOOL_REGISTRY = TOOL_REGISTRY;
+    // Re-instrument tools now that registry is fully populated
+    setTimeout(() => {
+        try {
+            if (typeof AETHER_Kernel !== 'undefined') {
+                AETHER_Kernel.instrumentRegistry(TOOL_REGISTRY);
+                AETHER_Kernel.ensurePanel();
+            }
+            if (typeof AETHER_Advanced !== 'undefined' && AETHER_Advanced.instrumentTools) {
+                AETHER_Advanced.instrumentTools();
+            }
+        } catch (e) { console.warn('[AETHER] kernel instrument', e); }
+    }, 500);
+
     // ── Console signature ─────────────────────────────────────
-    console.log('%c ⬡ AETHER v5.15 ONLINE ', 'background:#00f3ff;color:#050505;font-weight:bold;font-size:12px;padding:4px 8px;border-radius:3px;font-family:monospace');
-    console.log('%c Built by The Architect · Zero backend · 22+ providers · Skills active: ' + Object.keys(AETHER_SKILLS).length, 'color:#00f3ff;font-family:monospace');
-    console.log('%c Type /version in chat for full system info ', 'color:#334455;font-family:monospace');
+    const _ver = typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.27';
+    console.log('%c ⬡ AETHER ' + _ver + ' AETHER CODE PRO ONLINE ', 'background:#9b59b6;color:#fff;font-weight:bold;font-size:12px;padding:4px 8px;border-radius:3px;font-family:monospace');
+    console.log('%c Ship · Moat · DR v3 · Skills: ' + Object.keys(AETHER_SKILLS).length, 'color:#00f3ff;font-family:monospace');
+    try {
+        if (typeof AETHER_Moat !== 'undefined') {
+            AETHER_Moat.installHooks();
+            var _ms = AETHER_Moat.computeScore();
+            console.log('%c Moat integrity ' + _ms.overall + '/100 grade ' + _ms.grade, 'color:#9b94e8;font-family:monospace');
+        }
+        if (typeof AETHER_Ship !== 'undefined') {
+            AETHER_Ship.init();
+            var _g = AETHER_Ship.runGoldenPaths();
+            console.log('%c Golden paths ' + _g.passed + '/' + _g.total + (_g.ok ? ' PASS' : ' FAIL'), 'color:' + (_g.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
+        }
+    } catch (_) {}
+    console.log('%c /rag /mcp /tools /code  ·  hybrid BM25+vector · citations ', 'color:#334455;font-family:monospace');
+    try {
+        if (typeof AETHER_RAGv2 !== 'undefined') {
+            AETHER_RAGv2.ready().then(function () {
+                state.vectorRagEnabled = true; // hash-vector always available in v2
+            }).catch(function () {});
+        }
+    } catch (eRag) {}
+    try {
+        if (typeof AETHER_MCP !== 'undefined' && AETHER_MCP.hydrate) AETHER_MCP.hydrate();
+    } catch (eMcp) {}
+    try {
+        window.fsFolderShell = fsFolderShell;
+        window.fsFolderRead = fsFolderRead;
+        window.fsFolderExists = typeof fsFolderExists === 'function' ? fsFolderExists : window.fsFolderExists;
+        window.callAISimple = typeof callAISimple === 'function' ? callAISimple : window.callAISimple;
+        window.callTool = callTool;
+        window.parseMarkdown = typeof parseMarkdown === 'function' ? parseMarkdown : window.parseMarkdown;
+        window.smoothScrollToBottom = typeof smoothScrollToBottom === 'function' ? smoothScrollToBottom : window.smoothScrollToBottom;
+        window.pushCodeToolCard = typeof pushCodeToolCard === 'function' ? pushCodeToolCard : window.pushCodeToolCard;
+        if (typeof AETHER_ToolRuntime !== 'undefined') AETHER_ToolRuntime.enrichRegistry(TOOL_REGISTRY);
+        if (typeof AETHER_CodePro !== 'undefined') {
+            AETHER_CodePro.init && AETHER_CodePro.init();
+            AETHER_CodePro.installGhostHook && AETHER_CodePro.installGhostHook();
+        }
+        if (typeof AETHER_ToolPacks !== 'undefined') AETHER_ToolPacks.renderUI && AETHER_ToolPacks.renderUI();
+        if (typeof AETHER_ChangeSet !== 'undefined') AETHER_ChangeSet.refresh && AETHER_ChangeSet.refresh();
+        if (typeof AETHER_GitLite !== 'undefined') AETHER_GitLite.refreshChip && AETHER_GitLite.refreshChip();
+        if (typeof AETHER_CodeMobile !== 'undefined') AETHER_CodeMobile.sync && AETHER_CodeMobile.sync();
+    } catch (e) { console.warn('[AETHER] Code Pro init', e); }
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -18753,6 +21393,10 @@ function openAccountPage() {
     modal.appendChild(card);
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
     document.body.appendChild(modal);
+}
+// openAuthModal is an alias — older HTML wired this name; Account page is the real UI.
+function openAuthModal() {
+    return openAccountPage();
 }
 window.openAccountPage = openAccountPage;
 window.openAuthModal = openAuthModal;
