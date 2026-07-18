@@ -1811,7 +1811,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                         source: 'fs_write',
                         kind: 'write',
                     });
-                    return 'ok=false ghost=true path=' + path + ' msg=Ghost commit proposed (not written) — Accept in Ghost rail or set apply=auto / BEAST';
+                    // ok=true so tool-continue treats Ghost propose as success (pending Accept)
+                    return 'ok=true ghost=true path=' + path + ' msg=Ghost commit proposed (not written) — Accept in Ghost rail or set apply=auto / BEAST';
                 }
             } catch (gErr) {}
             await writeToFileHandle(fh, text);
@@ -14003,6 +14004,8 @@ ${result}`));
     async function handleStreamingResponse(response, convId, aetherMsg, startTime) {
         const reader=response.body.getReader(); const decoder=new TextDecoder();
         let buffer='', fullContent='', firstToken=null, tokenCount=0, lastTokenTime=startTime, lastCount=0;
+        // Accumulate native OpenAI-style tool_calls deltas across SSE chunks
+        const streamedToolCalls = []; // sparse by index
 
         liveThinkReset();
         agentStatus('write', 'Generating…');
@@ -14024,6 +14027,26 @@ ${result}`));
                         chunk=json.delta?.text||''; // Anthropic format
                     } else if(json.type==='message_delta'&&json.delta?.stop_reason){
                         // Anthropic end-of-stream signal
+                    }
+                    // Native tool_calls (OpenAI stream) — merge by index
+                    const deltaTcs = json.choices?.[0]?.delta?.tool_calls;
+                    if (Array.isArray(deltaTcs)) {
+                        for (const dtc of deltaTcs) {
+                            const idx = dtc.index != null ? dtc.index : streamedToolCalls.length;
+                            if (!streamedToolCalls[idx]) {
+                                streamedToolCalls[idx] = {
+                                    id: dtc.id || ('call_' + idx),
+                                    type: dtc.type || 'function',
+                                    function: { name: '', arguments: '' },
+                                };
+                            }
+                            const slot = streamedToolCalls[idx];
+                            if (dtc.id) slot.id = dtc.id;
+                            if (dtc.function) {
+                                if (dtc.function.name) slot.function.name += dtc.function.name;
+                                if (dtc.function.arguments) slot.function.arguments += dtc.function.arguments;
+                            }
+                        }
                     }
                     if(chunk){
                         if(!firstToken){ firstToken=performance.now(); if(state.showMetrics) $('latency-display').textContent=`TTFT: ${Math.round(firstToken-startTime)}ms`; agentDone(); }
@@ -14323,9 +14346,10 @@ ${result}`));
 
         // ── Execute tools: prefer native tool_calls, fallback to [[bracket]] text ──
         try {
-            var nativeFromStream = (typeof responseJson !== 'undefined' && responseJson?.choices?.[0]?.message?.tool_calls)
-                ? responseJson.choices[0].message.tool_calls
-                : null;
+            var nativeFromStream = streamedToolCalls.filter(function (tc) {
+                return tc && tc.function && tc.function.name;
+            });
+            if (!nativeFromStream.length) nativeFromStream = null;
             var collected = typeof collectAndExecuteTools === 'function'
                 ? await collectAndExecuteTools({ toolCalls: nativeFromStream, text: fullContent })
                 : { source: 'text', results: await parseAndExecuteTools(fullContent) };
@@ -14411,6 +14435,10 @@ ${result}`));
             .replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, '') // Anthropic function_calls blocks
             .trim();
 
+        // ── Intercept XML / <function()> tool formats ──
+        // Declare results array FIRST (was TDZ crash if function() path ran before const)
+        const xmlToolResults = [];
+
         // ── Intercept <function(tool_name {...})</function> format ──
         const funcCallRe = /<function\((\w+)\s+({[^}]*}|[^<]*)\)<\/function>/gi;
         let fcMatch;
@@ -14433,7 +14461,6 @@ ${result}`));
         // Catches <web_search>query</web_search> patterns models output
         const xmlToolRe = /<(web_search|search|visit_website)[^>]*>([\s\S]*?)<\/\1>/gi;
         let xmlMatch;
-        const xmlToolResults = [];
         while ((xmlMatch = xmlToolRe.exec(fullContent)) !== null) {
             const inner = xmlMatch[2].trim();
             let q = '';
@@ -14560,7 +14587,8 @@ ${result}`));
             state.codingSession.stopReasons[convId] = stopReason;
         }
 
-        // Final clean render — always runs regardless of streaming path
+        // Final clean render — re-run full Doc → Discovery → Viz → MD pipeline
+        // (must NOT markdown-only wipe charts/flows from the first pass)
         if(convId===state.currentConversationId){
             aetherMsg.innerHTML='';
 
@@ -14585,7 +14613,37 @@ ${result}`));
                     const autoCard = createFileCard(renderContent, fmt, heading ? heading[1].trim() : null);
                     display.appendChild(autoCard);
                 } else {
-                    aetherMsg.appendChild(parseMarkdown(renderContent));
+                    // Same pipeline as post-stream pass — preserves AetherViz / Docs / Discovery
+                    let vizRendered2 = false;
+                    try {
+                        if (activeSkills.some(function(s){ return s.name === 'documents-supremacy'; })) {
+                            vizRendered2 = await window._tryDocumentsSupremacyRender?.(renderContent, aetherMsg) || false;
+                        }
+                        if (!vizRendered2 && activeSkills.some(function(s){ return s.name === 'discovery'; })) {
+                            vizRendered2 = await window._tryDiscoverySkillRender?.(renderContent, aetherMsg) || false;
+                        }
+                        if (!vizRendered2 && window.AetherVisualizer) {
+                            const vizEl2 = document.createElement('div');
+                            vizEl2.className = 'aether-viz-container';
+                            const r2 = await window.AetherVisualizer.autoDetect(renderContent, vizEl2);
+                            const did2 = r2 && (r2.rendered === true || r2 === true);
+                            if (did2) {
+                                vizRendered2 = true;
+                                const rem2 = (r2 && typeof r2.remainder === 'string') ? r2.remainder : '';
+                                if (rem2) {
+                                    const mdEl2 = document.createElement('div');
+                                    mdEl2.appendChild(parseMarkdown(rem2));
+                                    aetherMsg.appendChild(mdEl2);
+                                }
+                                aetherMsg.appendChild(vizEl2);
+                            }
+                        }
+                    } catch (eViz2) {
+                        console.warn('[AETHER] Final viz pipeline:', eViz2.message);
+                    }
+                    if (!vizRendered2) {
+                        aetherMsg.appendChild(parseMarkdown(renderContent));
+                    }
                     attachActions(aetherMsg, renderContent);
                     attachRagCitations(aetherMsg);
                     // Auto-launch Construct if a complete HTML app was generated
@@ -15252,11 +15310,10 @@ ${result}`));
             } else {
                 const json=await response.json();
                 // Support OpenAI, Anthropic, and Gemini response formats
-                const responseJson = json;
                 if (json.choices?.[0]?.message?.content !== undefined) {
                     responseText = json.choices[0].message.content || '';
-                    // Check for tool calls when content is empty/null
-                    if(!responseText && json.choices[0].message.tool_calls){
+                    // Native tool_calls even when content is also present
+                    if (json.choices[0].message.tool_calls) {
                         toolCallsData = json.choices[0].message.tool_calls;
                     }
                 } else if (json.content) {
@@ -15270,60 +15327,108 @@ ${result}`));
                 } else {
                     responseText = 'NO RESPONSE';
                 }
-                // responseJson used in tool dispatch block above (streaming) — note: only valid in non-streaming path
                 const conv2=state.conversations[convId];
                 if(conv2){ conv2.messages.push({role:'assistant',content:responseText}); updateConversationTitle(conv2); saveConversations(); renderConversationList(); }
+
+                // Non-streaming: execute tools (native + text) then render with Viz pipeline
+                try {
+                    if (typeof collectAndExecuteTools === 'function') {
+                        const collectedNS = await collectAndExecuteTools({
+                            toolCalls: toolCallsData,
+                            text: responseText,
+                        });
+                        const brNS = collectedNS.results || [];
+                        if (brNS.length > 0 && convId === state.currentConversationId) {
+                            if (collectedNS.source === 'native') {
+                                const badge = document.createElement('div');
+                                badge.className = 'tool-source-badge';
+                                badge.textContent = '⚙ native tool_calls';
+                                display.appendChild(badge);
+                            }
+                            for (const { name, result } of brNS) {
+                                display.appendChild(renderToolResultCard(name, result));
+                            }
+                            if (conv2) {
+                                conv2.messages.push({
+                                    role: 'system',
+                                    content: '[Tool results · ' + (collectedNS.source || 'text') + ']\n' +
+                                        brNS.map(function (r) { return '[' + r.name + ']\n' + String(r.result); }).join('\n\n'),
+                                });
+                            }
+                            // Tool-continue for non-stream
+                            try {
+                                if (!state._toolContinueDepth) state._toolContinueDepth = {};
+                                var depthNS = state._toolContinueDepth[convId] || 0;
+                                var maxNS = (state.codingMode || (state.agentMode && state.agentMode !== 'off')) ? 4 : 3;
+                                var anyOkNS = brNS.some(function (r) {
+                                    return r && r.result && !/ok=false/i.test(String(r.result).slice(0, 80));
+                                });
+                                if (anyOkNS && depthNS < maxNS && convId === state.currentConversationId) {
+                                    state._toolContinueDepth[convId] = depthNS + 1;
+                                    var contNS =
+                                        'Tool results received (' + (collectedNS.source || 'text') +
+                                        ', round ' + (depthNS + 1) + '/' + maxNS + '). Continue with final answer or more tools.';
+                                    setTimeout(function () {
+                                        if (state.processingConversations[convId]) return;
+                                        var ev = new Event('aether-auto-continue');
+                                        ev.autoMessage = contNS;
+                                        ev.toolContinue = true;
+                                        document.dispatchEvent(ev);
+                                    }, 700);
+                                } else {
+                                    state._toolContinueDepth[convId] = 0;
+                                }
+                            } catch (_) {}
+                        }
+                    }
+                } catch (eNS) {
+                    console.warn('[AETHER] non-stream tools:', eNS.message);
+                }
+
                 if(convId===state.currentConversationId){
                     // Handle tool-only responses (non-streaming path)
-                    if(!responseText && toolCallsData){
+                    if((!responseText || responseText === 'NO RESPONSE') && toolCallsData){
                         const toolNames = toolCallsData.map(tc => tc.function?.name || tc.type || 'tool').join(', ');
-                        aetherMsg.innerHTML = '<p><strong>⚙ Executing:</strong> ' + toolNames + '</p>'
-                            + '<p class="tool-exec-detail">Results will appear below once complete…</p>';
+                        aetherMsg.innerHTML = '<p><strong>⚙ Tools:</strong> ' + toolNames + '</p>';
                         aetherMsg.className = 'aether-msg tool-exec-msg';
                     } else if(responseText && responseText !== 'NO RESPONSE'){
-                        // Per-word blur-in effect for non-streaming responses too
                         aetherMsg.innerHTML = '';
-                        const streamContainer = document.createElement('span');
-                        streamContainer.className = 'stream-text-container';
-                        aetherMsg.appendChild(streamContainer);
-
-                        // Parse markdown to DOM node (parseMarkdown returns a div element)
-                        const parsedNode = parseMarkdown(responseText);
-                        const fullText = parsedNode.textContent || parsedNode.innerText || '';
-
-                    // Split into words and animate each one
-                    const words = fullText.split(/(\s+)/);
-                    words.forEach((token, i) => {
-                        if(token.length === 0) return;
-                        if(token.match(/^\s+$/)){
-                            streamContainer.appendChild(document.createTextNode(token));
-                        } else {
-                            const wordSpan = document.createElement('span');
-                            wordSpan.className = 'stream-word';
-                            wordSpan.style.animationDelay = (i * 0.015) + 's'; // faster for batch
-                            wordSpan.textContent = token;
-                            streamContainer.appendChild(wordSpan);
+                        // Full Doc → Discovery → Viz → MD pipeline (not blur-then-wipe)
+                        let vizNS = false;
+                        try {
+                            if (activeSkills.some(function(s){ return s.name === 'documents-supremacy'; })) {
+                                vizNS = await window._tryDocumentsSupremacyRender?.(responseText, aetherMsg) || false;
+                            }
+                            if (!vizNS && activeSkills.some(function(s){ return s.name === 'discovery'; })) {
+                                vizNS = await window._tryDiscoverySkillRender?.(responseText, aetherMsg) || false;
+                            }
+                            if (!vizNS && window.AetherVisualizer) {
+                                const vizElNS = document.createElement('div');
+                                vizElNS.className = 'aether-viz-container';
+                                const rNS = await window.AetherVisualizer.autoDetect(responseText, vizElNS);
+                                if (rNS && (rNS.rendered === true || rNS === true)) {
+                                    vizNS = true;
+                                    const remNS = (rNS && typeof rNS.remainder === 'string') ? rNS.remainder : '';
+                                    if (remNS) {
+                                        const mdNS = document.createElement('div');
+                                        mdNS.appendChild(parseMarkdown(remNS));
+                                        aetherMsg.appendChild(mdNS);
+                                    }
+                                    aetherMsg.appendChild(vizElNS);
+                                }
+                            }
+                        } catch (_) {}
+                        if (!vizNS) aetherMsg.appendChild(parseMarkdown(responseText));
+                        attachActions(aetherMsg, responseText);
+                        attachRagCitations(aetherMsg);
+                        smoothScrollToBottom();
+                        const elapsed=performance.now()-startTime;
+                        if(state.showMetrics){
+                            $('latency-display').textContent=`TTFT: ${Math.round(elapsed)}ms`;
+                            $('tps-display').textContent=`TPS: ${(estimateTokens(responseText)/(elapsed/1000)).toFixed(1)}`;
                         }
-                    });
-
-                    // After animation completes, replace with proper markdown
-                    const animDuration = words.length * 15 + 300; // total animation time
-                    setTimeout(() => {
-                        if(aetherMsg && aetherMsg.isConnected){
-                            aetherMsg.innerHTML = '';
-                            aetherMsg.appendChild(parseMarkdown(responseText));
-                            attachActions(aetherMsg, responseText);
-                        }
-                    }, animDuration);
-
-                    smoothScrollToBottom();
-                    const elapsed=performance.now()-startTime;
-                    if(state.showMetrics){
-                        $('latency-display').textContent=`TTFT: ${Math.round(elapsed)}ms`;
-                        $('tps-display').textContent=`TPS: ${(estimateTokens(responseText)/(elapsed/1000)).toFixed(1)}`;
                     }
-                    } // end else if(responseText)
-                } // end if(convId===state.currentConversationId)
+                }
             }
 
             // Token accounting
@@ -16942,7 +17047,7 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
         { id:'code',      label:'/code',       desc:'Toggle Coding Mode',                               group:'Mode',    action: () => { document.getElementById('btn-coding-mode')?.click(); } },
         { id:'cot',       label:'/cot',        desc:'Toggle Chain-of-Thought reasoning',                group:'Mode',    action: () => { state.coTEnabled=!state.coTEnabled; saveState(); showNotification('CoT: '+(state.coTEnabled?'ON':'OFF'),'info'); } },
         { id:'stream',    label:'/stream',     desc:'Toggle streaming response on/off',                 group:'Mode',    action: () => { state.streamingEnabled=!state.streamingEnabled; saveState(); showNotification('Streaming: '+(state.streamingEnabled?'ON':'OFF'),'info'); } },
-        { id:'rag',       label:'/rag',        desc:'Toggle RAG memory on/off',                         group:'Mode',    action: () => { state.ragEnabled=!state.ragEnabled; saveState(); showNotification('RAG: '+(state.ragEnabled?'ON':'OFF'),'info'); } },
+        { id:'ragenable', label:'/ragenable',  desc:'Toggle RAG memory on/off (legacy)',                 group:'Mode',    action: () => { state.ragEnabled=!state.ragEnabled; saveState(); showNotification('RAG: '+(state.ragEnabled?'ON':'OFF'),'info'); } },
         { id:'temp',      label:'/temp [0-2]', desc:'Set temperature (e.g. /temp 0.7)',                 group:'Mode',    action: (arg) => { const t=parseFloat(arg); if(!isNaN(t)&&t>=0&&t<=2){ state.temperature=t; saveState(); showNotification('Temperature: '+t,'info'); } else showNotification('Usage: /temp 0.7','warn'); } },
 
         // ── Research ──────────────────────────────────────────
@@ -17205,17 +17310,26 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                 return;
             }
             await AETHER_RAGv2.ready();
+            // /rag on|off — memory inject toggle (was a second conflicting /rag command)
+            if (/^(on|off|enable|disable|toggle)$/i.test(a)) {
+                if (/toggle/i.test(a)) state.ragEnabled = !state.ragEnabled;
+                else state.ragEnabled = /^(on|enable)$/i.test(a);
+                saveState();
+                showNotification('RAG memory: ' + (state.ragEnabled ? 'ON' : 'OFF'), 'info');
+                return;
+            }
             if (!a || a === 'stats') {
                 const s = AETHER_RAGv2.stats();
                 addSystemMessage(
                     '**RAG v2**\n\n' +
+                    '- Memory inject: **' + (state.ragEnabled ? 'ON' : 'OFF') + '** (`/rag on|off`)\n' +
                     '- Chunks: **' + s.chunks + '**\n' +
                     '- Hybrid: **' + (s.hybrid ? 'ON' : 'OFF') + '**\n' +
                     '- Collections:\n' +
                     (s.collections.length
                         ? s.collections.map(function (c) { return '  - `' + c.id + '`: ' + c.chunks + ' chunks'; }).join('\n')
                         : '  _(empty)_') +
-                    '\n\nCommands: `/rag search <q>` · `/rag clear [collection]` · `/rag hybrid on|off` · `/rag index` (index linked CODE folder)'
+                    '\n\nCommands: `/rag index` · `/rag search <q>` · `/rag clear [collection]` · `/rag hybrid on|off` · `/rag on|off`'
                 );
                 return;
             }

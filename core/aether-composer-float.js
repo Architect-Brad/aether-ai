@@ -27,6 +27,7 @@
   var _dragging = false;
   var _dragStartY = 0;
   var _dragDelta = 0;
+  var _didDragSnap = false; // prevent click from undoing pointer-up snap
   var _bound = false;
 
   function isNarrow() {
@@ -250,11 +251,17 @@
       _deck.style.transform = '';
     }
     if (_dragDelta <= -DRAG_THRESHOLD) {
+      _didDragSnap = true;
       setMode('raised');
     } else if (_dragDelta >= DRAG_THRESHOLD) {
+      _didDragSnap = true;
       setMode('docked');
     }
     _dragDelta = 0;
+    // Clear snap flag after click event would have fired
+    setTimeout(function () {
+      _didDragSnap = false;
+    }, 50);
   }
 
   function wireEvents() {
@@ -262,31 +269,23 @@
     _bound = true;
 
     if (_handle) {
+      // Pointer events cover mouse + touch (no separate touch listeners — avoids double-fire)
       _handle.addEventListener('pointerdown', onPointerDown, { passive: false });
       window.addEventListener('pointermove', onPointerMove, { passive: true });
       window.addEventListener('pointerup', onPointerUp, { passive: true });
       window.addEventListener('pointercancel', onPointerUp, { passive: true });
-      // Fallback touch for older WebViews
-      _handle.addEventListener(
-        'touchstart',
-        function (e) {
-          onPointerDown(e);
-        },
-        { passive: false }
-      );
-      window.addEventListener(
-        'touchmove',
-        function (e) {
-          if (_dragging) onPointerMove(e);
-        },
-        { passive: true }
-      );
-      window.addEventListener('touchend', onPointerUp, { passive: true });
       _handle.addEventListener('click', function (e) {
-        // Tap handle = toggle (if not a real drag)
+        // Tap handle = toggle only if we did not just snap via drag
+        if (_didDragSnap) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (Math.abs(_dragDelta) < 8) toggle();
       });
     }
+    // Prefer PointerEvent only — avoid double-firing with touch on hybrid browsers
+    // (touch listeners removed; pointer covers mouse + touch)
     if (_toggle) _toggle.addEventListener('click', function () { toggle(); });
 
     // Keyboard / visual viewport

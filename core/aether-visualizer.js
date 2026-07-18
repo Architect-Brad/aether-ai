@@ -534,24 +534,32 @@
   // ── Chart.js ───────────────────────────────────────────────
 
   async function ensureChartJS() {
-    if (g.Chart) return;
+    if (g.Chart) return true;
     if (g.AETHER_Lazy) {
       var ok = await g.AETHER_Lazy.ensure('chart');
-      if (ok && g.Chart) return;
+      if (ok && g.Chart) return true;
     }
-    await new Promise(function (resolve, reject) {
-      var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
-      s.onload = resolve;
-      s.onerror = function () {
-        reject(new Error('Chart.js load failed'));
-      };
-      document.head.appendChild(s);
-    });
+    try {
+      await new Promise(function (resolve, reject) {
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
+        s.onload = resolve;
+        s.onerror = function () {
+          reject(new Error('Chart.js load failed'));
+        };
+        document.head.appendChild(s);
+      });
+    } catch (e) {
+      return false;
+    }
+    return !!g.Chart;
   }
 
   async function renderChart(spec, container, type) {
-    await ensureChartJS();
+    var chartOk = await ensureChartJS();
+    if (!chartOk || !g.Chart) {
+      throw new Error('Chart.js unavailable (CDN blocked or offline)');
+    }
     var canvas = document.createElement('canvas');
     canvas.style.maxHeight = '320px';
     container.appendChild(canvas);

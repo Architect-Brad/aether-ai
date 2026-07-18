@@ -214,9 +214,25 @@
         reject(new Error('no document'));
         return;
       }
-      // Already present?
-      if (document.querySelector('script[data-aether-lazy-src="' + url + '"]')) {
-        resolve();
+      // Already present — wait for load/error if still in flight
+      var existing = document.querySelector('script[data-aether-lazy-src="' + url + '"]');
+      if (existing) {
+        if (existing.getAttribute('data-aether-lazy-done') === '1') {
+          resolve();
+          return;
+        }
+        if (existing.getAttribute('data-aether-lazy-failed') === '1') {
+          reject(new Error('prior load failed: ' + url));
+          return;
+        }
+        existing.addEventListener('load', function () { resolve(); }, { once: true });
+        existing.addEventListener(
+          'error',
+          function () {
+            reject(new Error('load failed: ' + url));
+          },
+          { once: true }
+        );
         return;
       }
       var s = document.createElement('script');
@@ -224,9 +240,11 @@
       s.async = true;
       s.setAttribute('data-aether-lazy-src', url);
       s.onload = function () {
+        s.setAttribute('data-aether-lazy-done', '1');
         resolve();
       };
       s.onerror = function () {
+        s.setAttribute('data-aether-lazy-failed', '1');
         reject(new Error('load failed: ' + url));
       };
       (document.head || document.documentElement).appendChild(s);
@@ -287,7 +305,7 @@
           lastErr = e;
         }
       }
-      _failed[id] = true;
+      // Allow retry next ensure — do not permanent-fail on transient CDN blips
       delete _loading[id];
       if (g.console && g.console.warn) {
         g.console.warn('[AETHER Lazy] failed:', id, lastErr && lastErr.message);
