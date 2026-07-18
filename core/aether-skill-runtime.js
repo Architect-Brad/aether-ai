@@ -185,16 +185,19 @@
     builder: {
       label: 'Builder',
       desc: 'Code, debug, test, ship',
+      // Prefer light flagship set — aether-code is heavy enough for CODE fusion
       skills: ['aether-code', 'debug-detective', 'test-engineering', 'web-dev', 'architect'],
     },
     researcher: {
       label: 'Researcher',
       desc: 'Search, synthesise, ground answers',
-      skills: ['research-analyst', 'discovery', 'rag-librarian', 'critical-thinking', 'data-viz'],
+      // discovery is lazy-loaded; don't block onboard on CDN engine import
+      skills: ['research-analyst', 'rag-librarian', 'critical-thinking', 'data-viz'],
     },
     ops: {
       label: 'Ops',
       desc: 'Reliability, security, releases',
+      // base: devops · pack may also register devops-gitops (resolved if base missing)
       skills: ['devops', 'sre-incident', 'security-hardening', 'observability-pro', 'release-engineering'],
     },
   };
@@ -630,9 +633,22 @@
     var p = PRESETS[presetId];
     if (!p) return { ok: false, error: 'unknown preset' };
     var activated = [];
+    var seen = Object.create(null);
+    // Alias map for pack vs base naming drift
+    var aliases = {
+      devops: ['devops-gitops'],
+      'devops-gitops': ['devops'],
+      'web-dev': ['frontend-systems', 'web-development'],
+      architect: ['system-architecture'],
+    };
     p.skills.forEach(function (name) {
-      var sk = resolveSkill(registry || g.AETHER_SKILLS, name);
-      if (sk && typeof activateFn === 'function') {
+      var candidates = [name].concat(aliases[name] || []);
+      var sk = null;
+      for (var i = 0; i < candidates.length && !sk; i++) {
+        sk = resolveSkill(registry || g.AETHER_SKILLS, candidates[i]);
+      }
+      if (sk && typeof activateFn === 'function' && !seen[sk.name]) {
+        seen[sk.name] = 1;
         activateFn(sk.name);
         activated.push(sk.name);
       }

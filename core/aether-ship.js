@@ -295,7 +295,12 @@
   function shouldShowOnboard() {
     var s = onboardState();
     if (s.done || s.skipped) return false;
-    // show if never completed and no prior version flag
+    // Don't stack on top of the persona onboarding wizard
+    try {
+      if (typeof document !== 'undefined' && document.getElementById('onboarding-overlay')) return false;
+      // Wait until persona tour finished/skipped (separate key in script.js)
+      if (!localStorage.getItem('aether_onboarding_done')) return false;
+    } catch (e) {}
     return true;
   }
 
@@ -303,6 +308,10 @@
     if (!force && !shouldShowOnboard()) return false;
     var existing = document.getElementById('aether-onboard-modal');
     if (existing) existing.remove();
+    // Never stack under persona wizard
+    try {
+      if (!force && document.getElementById('onboarding-overlay')) return false;
+    } catch (e) {}
 
     var step = 0;
     var modal = document.createElement('div');
@@ -406,12 +415,26 @@
       }
       if (id === 'preset-builder' || id === 'preset-researcher' || id === 'preset-ops') {
         var pid = id.replace('preset-', '');
-        if (typeof g.applySkillPreset === 'function') g.applySkillPreset(pid);
-        else if (g.AETHER_SkillRuntime && g.AETHER_SkillRuntime.applyPreset && g.activateSkill) {
-          g.AETHER_SkillRuntime.applyPreset(g.AETHER_SKILLS, pid, g.activateSkill);
-        }
+        // Advance UI first, then apply preset on next frame so the wizard
+        // never freezes under multi-skill activation / panel rebuild.
         step++;
         render();
+        setTimeout(function () {
+          try {
+            if (typeof g.applySkillPreset === 'function') {
+              g.applySkillPreset(pid, { silent: true, fromOnboard: true });
+            } else if (g.AETHER_SkillRuntime && g.AETHER_SkillRuntime.applyPreset && g.activateSkill) {
+              g.AETHER_SkillRuntime.applyPreset(g.AETHER_SKILLS, pid, function (name) {
+                g.activateSkill(name, { silent: true, batch: true });
+              });
+            }
+            if (g.showNotification) {
+              g.showNotification('Preset applied: ' + pid, 'success');
+            }
+          } catch (e) {
+            if (g.showNotification) g.showNotification('Preset failed: ' + (e.message || e), 'warn');
+          }
+        }, 0);
         return;
       }
       if (id === 'link') {
@@ -732,12 +755,24 @@
     // Delayed UI mounts
     setTimeout(function () {
       mountCheckpointStrip('ship-checkpoint-host');
-      // First-run onboard (defer so main UI paints; needs real DOM shell)
-      if (shouldShowOnboard() && typeof document !== 'undefined' && document.getElementById && document.getElementById('user-input')) {
-        setTimeout(function () {
-          openOnboarding(false);
-        }, 1200);
+      // Ship tour only after persona onboarding is done (or was never needed).
+      // Poll a few times so we don't race the persona wizard finish.
+      function tryShipOnboard(attempt) {
+        if (typeof document === 'undefined' || !document.getElementById('user-input')) return;
+        if (!shouldShowOnboard()) {
+          // Persona may still be open — retry briefly
+          if (attempt < 20 && !onboardState().done && !onboardState().skipped) {
+            setTimeout(function () {
+              tryShipOnboard(attempt + 1);
+            }, 1500);
+          }
+          return;
+        }
+        openOnboarding(false);
       }
+      setTimeout(function () {
+        tryShipOnboard(0);
+      }, 1500);
     }, 800);
   }
 

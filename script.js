@@ -17923,7 +17923,17 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.36', date: 'July 2026', tag: 'latest',
+            version: 'v5.36.1', date: 'July 2026', tag: 'latest',
+            headline: 'Hotfix — onboard freeze / RAM spike on preset (Builder·Ops)',
+            notes: [
+                { type:'fix',  text:'OCR — stop eager PaddleOCR/ONNX init at boot (was multi‑MB model download during first-run)' },
+                { type:'fix',  text:'ONBOARD — ship tour no longer stacks on persona wizard; preset applies off the UI thread' },
+                { type:'fix',  text:'PRESETS — batch silent skill activate; no skills-grid rebuild when panel closed' },
+                { type:'fix',  text:'SKILLS PANEL — cards no longer embed full system prompts (Details only)' },
+            ],
+        },
+        {
+            version: 'v5.36', date: 'July 2026', tag: '',
             headline: 'Agent Closure — tool→model loop, shipcheck, Ghost reliability, RAG index',
             notes: [
                 { type:'new',  text:'TOOL CONTINUE — after native/text tools, model re-enters (depth 3–4); works outside CODE' },
@@ -19326,34 +19336,46 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
         return activeSkills.some(function(s){ return s.name === name || s === resolveAetherSkill(name); });
     }
 
-    function activateSkill(skillId) {
+    /**
+     * Activate a skill.
+     * @param {string} skillId
+     * @param {{ silent?: boolean, batch?: boolean }} [opts]
+     *   silent — no toast / moat per skill (use for presets)
+     *   batch  — skip runner-bar refresh (caller refreshes once)
+     */
+    function activateSkill(skillId, opts) {
+        opts = opts || {};
         const skill = resolveAetherSkill(skillId);
         if (!skill) return;
         if (!isSkillActive(skill.name)) {
             activeSkills.push(skill);
         }
         try { localStorage.setItem(ACTIVE_SKILL_KEY, JSON.stringify(activeSkills.map(function(s){ return s.name; }))); } catch(e) {}
-        var tier = skill.tier ? ' · ' + skill.tier : '';
-        showNotification('⬡ ' + skill.label + ' activated' + tier, 'success');
-        try {
-            if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
-                AETHER_Moat.record('skill', {
-                    title: 'Skill activated: ' + skill.label,
-                    detail: skill.name + (skill.tier ? ' · ' + skill.tier : ''),
-                    meta: { skill: skill.name, tier: skill.tier },
-                });
-            }
-        } catch (_) {}
-        // CODE fusion: nudge coding mode + playbooks for coding skills
-        try {
-            if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.codeFusionHints) {
-                var fusion = AETHER_SkillRuntime.codeFusionHints(skill);
-                if (fusion && fusion.enableCodingMode && !state.codingMode) {
-                    showNotification('⌘ ' + skill.label + ' — enable CODE mode for Ghost + fs_patch', 'info');
+        if (!opts.silent) {
+            var tier = skill.tier ? ' · ' + skill.tier : '';
+            showNotification('⬡ ' + skill.label + ' activated' + tier, 'success');
+            try {
+                if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
+                    AETHER_Moat.record('skill', {
+                        title: 'Skill activated: ' + skill.label,
+                        detail: skill.name + (skill.tier ? ' · ' + skill.tier : ''),
+                        meta: { skill: skill.name, tier: skill.tier },
+                    });
                 }
-            }
-        } catch (_) {}
-        try { refreshSkillRuntimeBar(); } catch (_) {}
+            } catch (_) {}
+            // CODE fusion: nudge coding mode + playbooks for coding skills
+            try {
+                if (typeof AETHER_SkillRuntime !== 'undefined' && AETHER_SkillRuntime.codeFusionHints) {
+                    var fusion = AETHER_SkillRuntime.codeFusionHints(skill);
+                    if (fusion && fusion.enableCodingMode && !state.codingMode) {
+                        showNotification('⌘ ' + skill.label + ' — enable CODE mode for Ghost + fs_patch', 'info');
+                    }
+                }
+            } catch (_) {}
+        }
+        if (!opts.batch) {
+            try { refreshSkillRuntimeBar(); } catch (_) {}
+        }
     }
 
     function deactivateSkill(skillId) {
@@ -19555,14 +19577,15 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
             var skillTypeCls = skill.type === 'engine' ? 'skill-type-engine' : 'skill-type-prompt';
             var tier = skill.tier || 'standard';
             var tierCls = 'skill-tier-pill skill-tier-' + tier;
-            var spSafe = (skill.systemPrompt||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-            var spPreview = spSafe.length > 90 ? spSafe.slice(0,90) + '…' : spSafe;
-            var spId = 'sp-' + skill.name.replace(/[^a-z0-9-]/g,'');
-            var spHtml = spSafe ? '<div class="skill-card-prompt" id="'+spId+'">'
-                + '<div class="skill-prompt-preview">'+spPreview+'</div>'
-                + '<pre class="skill-prompt-full hidden">'+spSafe+'</pre>'
-                + '<button class="skill-prompt-toggle" onclick="event.stopPropagation();document.getElementById(\''+spId+'\').classList.toggle(\'expanded\')">Show system prompt</button>'
-                + '</div>' : '';
+            // Preview only — full systemPrompt lives in Details pane (avoid embedding
+            // 40k+ chars of prompts into every card in the hidden skills grid).
+            var spRaw = skill.systemPrompt || '';
+            var spPreview = spRaw
+                ? spRaw.slice(0, 90).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + (spRaw.length > 90 ? '…' : '')
+                : '';
+            var spHtml = spPreview
+                ? '<div class="skill-card-prompt"><div class="skill-prompt-preview">' + spPreview + '</div></div>'
+                : '';
 
             item.innerHTML = '<div class="skill-card-header">'
                 + '<span class="skill-card-icon">'+skill.icon+'</span>'
@@ -19810,13 +19833,16 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
 
     // Preload engine modules when skill is activated (hydrate prompts)
     const _origActivateSkill = activateSkill;
-    activateSkill = function(skillId) {
-        _origActivateSkill(skillId);
+    activateSkill = function(skillId, opts) {
+        _origActivateSkill(skillId, opts);
         var sk = resolveAetherSkill(skillId);
         var nm = sk ? sk.name : skillId;
+        // Defer heavy engine imports so preset clicks don't stall the UI thread
         if (nm === 'discovery' || nm === 'documents-supremacy') {
-            if (nm === 'discovery') loadDiscoverySkill();
-            if (nm === 'documents-supremacy') loadDocumentsSupremacy();
+            setTimeout(function () {
+                if (nm === 'discovery') loadDiscoverySkill();
+                if (nm === 'documents-supremacy') loadDocumentsSupremacy();
+            }, 0);
         }
     };
     window.activateSkill = activateSkill;
@@ -19879,15 +19905,41 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
     }
     window.runSkillWorkflow = runSkillWorkflow;
 
-    function applySkillPreset(presetId) {
-        if (typeof AETHER_SkillRuntime === 'undefined') return;
-        var r = AETHER_SkillRuntime.applyPreset(AETHER_SKILLS, presetId, activateSkill);
+    function applySkillPreset(presetId, opts) {
+        opts = opts || {};
+        if (typeof AETHER_SkillRuntime === 'undefined') return { ok: false, error: 'runtime offline' };
+        // Batch activate: one toast, one moat event, one panel refresh — avoids
+        // main-thread thrash (5× notifications + full skills grid rebuild) that
+        // freezes first-run onboarding on low-RAM devices.
+        var r = AETHER_SkillRuntime.applyPreset(AETHER_SKILLS, presetId, function (name) {
+            activateSkill(name, { silent: true, batch: true });
+        });
         if (r.ok) {
-            showNotification('Preset ' + presetId + ': ' + r.activated.length + ' skills', 'success');
-            if (typeof renderSkillsPanel === 'function') renderSkillsPanel();
-        } else {
+            try {
+                if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
+                    AETHER_Moat.record('skill', {
+                        title: 'Preset: ' + presetId,
+                        detail: (r.activated || []).join(', '),
+                        meta: { preset: presetId, n: (r.activated || []).length },
+                    });
+                }
+            } catch (_) {}
+            try { refreshSkillRuntimeBar(); } catch (_) {}
+            if (!opts.silent) {
+                showNotification('Preset ' + presetId + ': ' + r.activated.length + ' skills', 'success');
+            }
+            // Only rebuild skills grid if the panel is actually open
+            try {
+                var modal = document.getElementById('skills-panel-modal');
+                if (modal && !modal.classList.contains('hidden') && typeof renderSkillsPanel === 'function') {
+                    // Defer one frame so onboard wizard can advance first
+                    requestAnimationFrame(function () { renderSkillsPanel(); });
+                }
+            } catch (_) {}
+        } else if (!opts.silent) {
             showNotification(r.error || 'Preset failed', 'warn');
         }
+        return r;
     }
     window.applySkillPreset = applySkillPreset;
 
@@ -21370,8 +21422,17 @@ Format the final summary as a single, clean text block divided into the five lab
     updateUIFromState();
     updateDualChatUI();
     if(input) input.focus();
-    initPaddleOcr().catch(()=>{});
-    if(state.vectorRagEnabled) initOrama().catch(()=>{});
+    // OCR is LAZY — never init Paddle/ONNX at boot. Eager model download
+    // (~50–150MB WASM+ONNX) freezes the UI during first-run onboarding.
+    // Models load on first image/OCR use via processImageWithPaddle → initPaddleOcr.
+    if(state.vectorRagEnabled) {
+        // Defer vector init until after paint + onboarding so first-run stays smooth
+        setTimeout(function () {
+            if (!document.getElementById('onboarding-overlay') && !document.getElementById('aether-onboard-modal')) {
+                initOrama().catch(function () {});
+            }
+        }, 4000);
+    }
 
     // ── Active Workspace greeting ─────────────────────────────
     // Instead of "How can I help?", AETHER reads recent workspace
@@ -21381,7 +21442,8 @@ Format the final summary as a single, clean text block divided into the five lab
         try { await showActiveWorkspaceGreeting(); } catch(e) {}
     }, 1200);
 
-    // Show onboarding on first launch
+    // Show onboarding on first launch (persona wizard). Ship preset tour
+    // waits until this is done — see aether-ship shouldShowOnboard.
     if(!localStorage.getItem(ONBOARD_KEY)) {
         setTimeout(showOnboarding, 800);
     }

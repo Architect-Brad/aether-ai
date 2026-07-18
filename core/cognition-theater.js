@@ -6,7 +6,8 @@
 
   var _reasonAmp = 0;
   var _toolGlyphs = [];
-  var _enabled = true;
+  // Off by default — opt-in via Beast / theater toggle (avoids permanent rAF cost)
+  var _enabled = false;
   var _hooked = false;
 
   function setReasoning(level) {
@@ -110,6 +111,13 @@
   }
 
   function loop() {
+    if (!_enabled) {
+      // Park the rAF loop while theater is off — saves main-thread work on mobile
+      setTimeout(function () {
+        requestAnimationFrame(loop);
+      }, 500);
+      return;
+    }
     var layer = ensureLayer();
     var base = document.getElementById('aether-wave');
     if (layer && base) {
