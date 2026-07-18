@@ -1,8 +1,8 @@
 {
   "name": "AETHER Neural Interface",
   "short_name": "AETHER",
-  "description": "Open-source AI — Agent Mode, Call Mode, 22 providers, FLUX.2 images, offline STT. GPL-3.0.",
-  "version": "5.15",
+  "description": "Neural OS — Council, Kernel, Soul, Thread Graph, Ghost Commits, Beast Mode. GPL-3.0.",
+  "version": "5.17",
   "start_url": "./index.html",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],

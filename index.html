@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ═══════════════════════════════════════════════════════════
-  AETHER Neural Interface v5.14 — index.html
+  AETHER Neural Interface v5.18 — Aether Code — index.html
   Copyright (C) 2026 The Architect · GPL-3.0-or-later
 
   This is the entire UI shell. ~1,300 lines of HTML.
@@ -32,13 +32,17 @@
 <head>
     <!-- ═══ META: The boring stuff that makes browsers behave ═══ -->
     <meta charset="UTF-8">
-    <title>AETHER :: NEURAL INTERFACE v5.14</title>
+    <title>AETHER :: NEURAL INTERFACE v5.18 · AETHER CODE</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="description" content="AETHER Neural Interface — Open-source AI. Local models, cloud APIs, 16 tools. GPL-3.0.">
     <meta name="theme-color" content="#00f3ff">
+    <!-- Security: baseline CSP (CDN tools + local models still work). Tighten further in vercel.json. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.katex.org https://unpkg.com https://esm.sh https://js.puter.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.katex.org; img-src 'self' data: blob: https:; font-src 'self' data: https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://cdn.katex.org; connect-src 'self' http://127.0.0.1:* http://localhost:* https: wss:; worker-src 'self' blob:; frame-src 'self' blob: https:; object-src 'none'; base-uri 'self'; form-action 'self'">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin">
 
     <!-- ═══ FAVICON: Our logo — lightning bolt in hex ring ═══ -->
     <link rel="icon" type="image/svg+xml" href="logo.svg">
@@ -47,11 +51,12 @@
     <!-- ═══ DEVICE DETECTION: Runs before first paint to prevent layout flash ═══ -->
     <!-- Yes, this inline script is ugly. But it prevents a 200ms flash of wrong layout. -->
     <!-- That's the difference between "feels native" and "feels like a website." -->
-    <script>(function(){var c=window.matchMedia('(pointer:coarse)').matches,w=window.innerWidth;var cls=(!c||w>=1100)?'device-desktop':(c&&w>=768)?'device-tablet':'device-mobile';document.documentElement.classList.add(cls);document.documentElement.dataset.device=cls.replace('device-','');})();</script>
+    <script>(function(){var c=window.matchMedia('(pointer:coarse)').matches,w=window.innerWidth;var cls=(!c||w>=1100)?'device-desktop':(c&&w>=768)?'device-tablet':'device-mobile';document.documentElement.classList.add(cls);document.documentElement.dataset.device=cls.replace('device-','');try{var th=localStorage.getItem('aether_theme_v1');if(th==='ivory'){var d=document.documentElement;d.setAttribute('data-aether-theme','ivory');d.classList.add('theme-light');d.style.backgroundColor='#F5F1EB';d.style.color='#2C2416';var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute('content','#F5F1EB');}}catch(e){}})();</script>
 
     <!-- ═══ STYLESHEETS: Our 7,300-line masterpiece + KaTeX for math ═══ -->
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style-ivory.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
     <!-- KaTeX loads only in standards mode to prevent quirks-mode warning in WebViews -->
     <script>
@@ -302,7 +307,7 @@
             <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
         </div>
         <h1 class="splash-title">AETHER</h1>
-        <div class="splash-subtitle">NEURAL INTERFACE v5.14</div>
+        <div class="splash-subtitle">NEURAL INTERFACE v5.16 · BEAST MODE</div>
         <div class="splash-loading">
             <div class="loading-bar"><div class="loading-progress" id="splash-progress"></div></div>
             <div class="loading-text" id="splash-text">INITIALIZING NEURAL CORE...</div>
@@ -399,7 +404,7 @@
                 <span class="status-divider">│</span>
                 <span class="status-model-pill" id="status-model-pill"><svg class="ic-xs" style="opacity:.5"><use href="#ic-cpu"/></svg><span id="status-model-name">local</span></span>
                 <span class="status-divider">│</span>
-                <span class="status-state">v5.14 NEURAL</span>
+                <span class="status-state" id="status-version-label">v5.33 SHIP</span>
             </div>
             <div class="status-right">
             <button id="btn-cal-connect" class="cal-indicator" onclick="window.authorizeCalendar?window.authorizeCalendar():null" title="Connect Google Calendar">
@@ -434,32 +439,43 @@
             </div>
         </div>
 
-        <!-- CONTROL PANEL -->
-        <div class="control-sector">
-            <button class="cmd-btn" id="btn-new-chat"><svg class="ic-sm"><use href="#ic-plus"/></svg> NEW</button>
-            <button class="cmd-btn" id="btn-stop" disabled><svg class="ic-sm"><use href="#ic-stop"/></svg> STOP</button>
-            <button class="cmd-btn" id="btn-regenerate" disabled><svg class="ic-sm"><use href="#ic-refresh"/></svg> RETRY</button>
-            <button class="cmd-btn" id="btn-deep-research" title="Deep Research mode"><svg class="ic-sm"><use href="#ic-atom"/></svg> DEEP</button>
-            <button class="cmd-btn" id="btn-coding-mode" title="AETHER Code — Plan-first autonomous coding"><svg class="ic-sm"><use href="#ic-code-mode"/></svg>⌨ AETHER CODE</button>
-            <button class="cmd-btn" id="btn-bg-mode" title="Background Tasks &amp; Notifications"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> BG</button>
-            <button class="cmd-btn" id="btn-agent-mode" title="Agent Mode — autonomous multi-step execution"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><circle cx="19" cy="5" r="2" fill="currentColor" stroke="none"/></svg> AGENT</button>
-            <button class="cmd-btn" id="btn-call-mode" title="Call Mode — AETHER calls you for a voice check-in"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.48 2 2 0 0 1 3.61 1.3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg></button>
-            <button class="cmd-btn" id="btn-aether-soul" title="AETHER Self-Model — view philosophical identity &amp; user model" onclick="typeof openSoulViewer==='function'&&openSoulViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 2 7 12 22 22 7"/></svg> SOUL</button>
-            <button class="cmd-btn" id="btn-skills" title="AETHER Skills — activate specialised capability packs" onclick="typeof openSkillsPanel==='function'&&openSkillsPanel()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> SKILLS</button>
-            <button class="cmd-btn" id="btn-rag-viewer" title="RAG Knowledge Base — view, search, manage stored documents" onclick="typeof openRagViewer==='function'&&openRagViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6a9 3 0 0 0 18 0V5"/><path d="M3 11v6a9 3 0 0 0 18 0v-6"/></svg> RAG</button>
-            <button class="cmd-btn" id="btn-auth" title="Account — sign in and manage your profile" onclick="typeof openAccountPage==='function'&&openAccountPage()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Account</button>
-            <button class="cmd-btn" id="puter-connect-btn" title="Connect Puter AI Cloud — unlocks terminal, deploy, cloud storage" onclick="typeof connectPuter==='function'&&connectPuter()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg> ⬡ Puter</button>
-            <button class="cmd-btn" id="btn-location" title="Enable location access for context-aware responses"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.4 7.05 11.5 7.35 11.76a1 1 0 0 0 1.3 0C12.95 21.5 20 15.4 20 10a8 8 0 0 0-8-8z"/></svg></button>
-            <button class="cmd-btn" id="btn-ocr"><svg class="ic-sm"><use href="#ic-camera"/></svg> OCR</button>
-            <button class="cmd-btn" id="btn-settings"><svg class="ic-sm"><use href="#ic-settings"/></svg> CFG</button>
-            <button class="cmd-btn" id="btn-setup"><svg class="ic-sm"><use href="#ic-wrench"/></svg> SETUP</button>
-            <button class="cmd-btn" id="btn-hooks"><svg class="ic-sm"><use href="#ic-plug"/></svg> HOOKS</button>
-            <button class="cmd-btn" id="btn-services"><svg class="ic-sm"><use href="#ic-chart-bar"/></svg> SVCS</button>
-            <button class="cmd-btn" id="btn-workspace"><svg class="ic-sm"><use href="#ic-folder"/></svg> WS</button>
-            <button class="cmd-btn" id="btn-quota"><svg class="ic-sm"><use href="#ic-dollar"/></svg> QUOTA</button>
-            <button class="cmd-btn" id="btn-canvas" title="Canvas Workbench (Experimental)"><svg class="ic-sm"><use href="#ic-image"/></svg> CANVAS <sup class="exp-sup">β</sup></button>
-            <button class="cmd-btn" id="btn-ascii" title="ASCII 3D Renderer (Experimental)"><svg class="ic-sm"><use href="#ic-cube"/></svg> ASCII <sup class="exp-sup">β</sup></button>
-            <button class="cmd-btn" id="btn-export"><svg class="ic-sm"><use href="#ic-download"/></svg> SAVE</button>
+        <!-- CONTROL PANEL — core always visible; MODES + MORE collapsible -->
+        <div class="control-sector" id="control-sector">
+            <div class="control-core" id="control-core">
+                <button class="cmd-btn" id="btn-new-chat"><svg class="ic-sm"><use href="#ic-plus"/></svg> NEW</button>
+                <button class="cmd-btn" id="btn-stop" disabled><svg class="ic-sm"><use href="#ic-stop"/></svg> STOP</button>
+                <button class="cmd-btn" id="btn-regenerate" disabled><svg class="ic-sm"><use href="#ic-refresh"/></svg> RETRY</button>
+                <button class="cmd-btn more-toggle" id="btn-hero-modes" title="Show hero modes (Agent, Code, Deep, …)" aria-expanded="false">MODES ▾</button>
+                <button class="cmd-btn" id="btn-settings"><svg class="ic-sm"><use href="#ic-settings"/></svg> CFG</button>
+                <button class="cmd-btn more-toggle" id="btn-more-tools" title="Show advanced tools" aria-expanded="false">MORE ▾</button>
+            </div>
+            <div class="control-hero collapsed" id="control-hero">
+                <button class="cmd-btn hero-mode" id="btn-agent-mode" title="Agent Mode — autonomous multi-step execution"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/><circle cx="19" cy="5" r="2" fill="currentColor" stroke="none"/></svg> AGENT</button>
+                <button class="cmd-btn hero-mode" id="btn-coding-mode" title="AETHER Code — Plan-first autonomous coding"><svg class="ic-sm"><use href="#ic-code-mode"/></svg> CODE</button>
+                <button class="cmd-btn hero-mode" id="btn-deep-research" title="Deep Research mode"><svg class="ic-sm"><use href="#ic-atom"/></svg> DEEP</button>
+                <button class="cmd-btn hero-mode" id="btn-workspace"><svg class="ic-sm"><use href="#ic-folder"/></svg> WS</button>
+                <button class="cmd-btn hero-mode" id="btn-setup"><svg class="ic-sm"><use href="#ic-wrench"/></svg> SETUP</button>
+                <button class="cmd-btn beast-btn" id="btn-beast-mode" title="Beast Mode — max agent autonomy, exhaustive research, full tools" aria-pressed="false"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg> BEAST</button>
+                <span class="beast-mode-badge" id="beast-mode-badge" style="display:none" title="Beast Mode active">⬡ BEAST</span>
+            </div>
+            <div class="control-advanced collapsed" id="control-advanced">
+                <button class="cmd-btn" id="btn-bg-mode" title="Background Tasks &amp; Notifications"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg> BG</button>
+                <button class="cmd-btn" id="btn-call-mode" title="Call Mode — AETHER calls you for a voice check-in"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.48 2 2 0 0 1 3.61 1.3h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 9a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg> CALL</button>
+                <button class="cmd-btn" id="btn-aether-soul" title="AETHER Self-Model — view philosophical identity &amp; user model" onclick="typeof openSoulViewer==='function'&&openSoulViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="12 2 2 7 12 22 22 7"/></svg> SOUL</button>
+                <button class="cmd-btn" id="btn-skills" title="AETHER Skills — activate specialised capability packs" onclick="typeof openSkillsPanel==='function'&&openSkillsPanel()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg> SKILLS</button>
+                <button class="cmd-btn" id="btn-moat" title="AETHER Moat — provenance, score, handoffs" onclick="typeof openMoatPanel==='function'&&openMoatPanel()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> MOAT</button>
+                <button class="cmd-btn" id="btn-rag-viewer" title="RAG Knowledge Base — view, search, manage stored documents" onclick="typeof openRagViewer==='function'&&openRagViewer()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6a9 3 0 0 0 18 0V5"/><path d="M3 11v6a9 3 0 0 0 18 0v-6"/></svg> RAG</button>
+                <button class="cmd-btn" id="btn-auth" title="Account — sign in and manage your profile" onclick="typeof openAccountPage==='function'&&openAccountPage()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Account</button>
+                <button class="cmd-btn" id="puter-connect-btn" title="Connect Puter AI Cloud — unlocks terminal, deploy, cloud storage" onclick="typeof connectPuter==='function'&&connectPuter()"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg> ⬡ Puter</button>
+                <button class="cmd-btn" id="btn-location" title="Enable location access for context-aware responses"><svg class="ic-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5.4 7.05 11.5 7.35 11.76a1 1 0 0 0 1.3 0C12.95 21.5 20 15.4 20 10a8 8 0 0 0-8-8z"/></svg></button>
+                <button class="cmd-btn" id="btn-ocr"><svg class="ic-sm"><use href="#ic-camera"/></svg> OCR</button>
+                <button class="cmd-btn" id="btn-hooks"><svg class="ic-sm"><use href="#ic-plug"/></svg> HOOKS</button>
+                <button class="cmd-btn" id="btn-services"><svg class="ic-sm"><use href="#ic-chart-bar"/></svg> SVCS</button>
+                <button class="cmd-btn" id="btn-quota"><svg class="ic-sm"><use href="#ic-dollar"/></svg> QUOTA</button>
+                <button class="cmd-btn" id="btn-canvas" title="Canvas Workbench (Experimental)"><svg class="ic-sm"><use href="#ic-image"/></svg> CANVAS <sup class="exp-sup">β</sup></button>
+                <button class="cmd-btn" id="btn-ascii" title="ASCII 3D Renderer (Experimental)"><svg class="ic-sm"><use href="#ic-cube"/></svg> ASCII <sup class="exp-sup">β</sup></button>
+                <button class="cmd-btn" id="btn-export"><svg class="ic-sm"><use href="#ic-download"/></svg> SAVE</button>
+            </div>
         </div>
 
         <!-- WORKSPACE STATUS -->
@@ -476,8 +492,8 @@
             <div class="ap-left">
                 <div class="ap-status-ring" id="ap-ring">
                     <svg class="ap-ring-svg" viewBox="0 0 44 44" fill="none">
-                        <circle cx="22" cy="22" r="18" stroke="rgba(0,243,255,0.12)" stroke-width="1.5"/>
-                        <circle cx="22" cy="22" r="18" stroke="#00f3ff" stroke-width="1.5" stroke-dasharray="113" stroke-dashoffset="113" id="ap-ring-arc" stroke-linecap="round"/>
+                        <circle class="ap-ring-track" cx="22" cy="22" r="18" stroke-width="1.5"/>
+                        <circle class="ap-ring-progress" cx="22" cy="22" r="18" stroke-width="1.5" stroke-dasharray="113" stroke-dashoffset="113" id="ap-ring-arc" stroke-linecap="round"/>
                     </svg>
                     <div class="ap-ring-icon" id="ap-ring-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
@@ -486,23 +502,67 @@
             </div>
             <div class="ap-center">
                 <div class="ap-status-text" id="ap-status-text">AETHER READY</div>
-                <div class="ap-sub-text" id="ap-sub-text">Neural Interface v5.15</div>
+                <div class="ap-sub-text" id="ap-sub-text">Neural Interface</div>
                 <div class="ap-particles" id="ap-particles"></div>
             </div>
-            <div class="ap-right">
-                <div class="ap-metrics">
+            <div class="ap-right" id="ap-right">
+                <div class="ap-metrics" id="ap-metrics">
                     <div class="ap-metric"><span class="ap-metric-label">TEMP</span><span id="temp-display" class="ap-metric-val">0.1</span></div>
                     <div class="ap-metric"><span class="ap-metric-label">TPS</span><span id="tps-display" class="ap-metric-val ap-tps">—</span></div>
-                    <div class="ap-metric"><span id="latency-display" class="ap-metric-val" style="font-size:.55rem;color:#223344">—</span></div>
+                    <div class="ap-metric"><span id="latency-display" class="ap-metric-val ap-latency">—</span></div>
                 </div>
             </div>
         </div>
 
-        <!-- CHAT (flex row wrapper for side-by-side chat + tree) -->
+        <!-- CODE session rail — terminal-agent chrome when CODE mode is on -->
+        <div id="code-session-rail" class="code-session-rail" style="display:none" aria-hidden="true">
+            <div class="code-session-left">
+                <span class="code-session-brand">⌨ AETHER CODE</span>
+                <span class="code-session-status" id="code-session-status" data-status="idle">idle</span>
+                <span class="code-session-folder" id="code-session-folder">no folder</span>
+            </div>
+            <div class="code-session-center">
+                <span class="code-session-hint" id="code-session-hint">@file · Checkpoint · Ghost · Verify</span>
+            </div>
+            <div class="code-session-right">
+                <span class="code-session-turns" id="code-session-turns">Turn 0/25</span>
+                <label class="code-accept-mode" title="ask = ghost commits · auto = apply immediately · plan = propose only">
+                    <span class="code-accept-label">apply</span>
+                    <select id="code-accept-mode" aria-label="Patch apply mode">
+                        <option value="ask">ask</option>
+                        <option value="auto">auto</option>
+                        <option value="plan">plan-only</option>
+                    </select>
+                </label>
+                <button type="button" class="code-rail-btn" id="code-rail-link-folder" title="Link project folder">📁 Folder</button>
+            </div>
+        </div>
+        <!-- Code Pro change-set bar is injected by core/aether-code-pro.js -->
+
+        <!-- Mobile CODE tab strip (shown ≤768px when coding-mode) -->
+        <nav id="code-mobile-tabs" class="code-mobile-tabs" style="display:none" aria-label="Code panels" aria-hidden="true">
+            <button type="button" class="code-m-tab active" data-code-tab="stream" aria-selected="true">
+                <span class="code-m-ico">💬</span><span class="code-m-label">Chat</span>
+            </button>
+            <button type="button" class="code-m-tab" data-code-tab="files" aria-selected="false">
+                <span class="code-m-ico">📁</span><span class="code-m-label">Files</span>
+            </button>
+            <button type="button" class="code-m-tab" data-code-tab="tools" aria-selected="false">
+                <span class="code-m-ico">⚙</span><span class="code-m-label">Tools</span>
+                <span class="code-m-badge" id="code-m-ghost-badge" style="display:none">0</span>
+            </button>
+            <button type="button" class="code-m-tab" data-code-tab="term" aria-selected="false">
+                <span class="code-m-ico">$</span><span class="code-m-label">Term</span>
+            </button>
+            <button type="button" class="code-m-tab" data-code-tab="more" aria-selected="false">
+                <span class="code-m-ico">⋯</span><span class="code-m-label">More</span>
+            </button>
+        </nav>
+
+        <!-- CHAT workspace: tree | agent stream | tool/ghost rail -->
         <div class="chat-row" id="chat-row">
-        <div id="chat-display" class="console-output"></div>
-        <!-- File tree panel (coding mode, desktop only) -->
-        <div id="coding-file-tree" class="coding-file-tree" style="display:none">
+        <!-- File tree panel (coding mode — left rail / mobile sheet) -->
+        <div id="coding-file-tree" class="coding-file-tree" style="display:none" data-code-panel="files">
             <div class="coding-tree-header">
                 <span class="coding-tree-title"><svg class="ic-xs"><use href="#ic-folder"/></svg> <span id="coding-tree-label">Project</span></span>
                 <button class="coding-tree-refresh" id="coding-tree-refresh" title="Refresh tree"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></button>
@@ -511,10 +571,27 @@
                 <div class="coding-tree-loading">Loading…</div>
             </div>
         </div>
+        <div id="chat-display" class="console-output code-agent-stream" data-code-panel="stream"></div>
+        <!-- Right rail: tool flights + ghost patches (coding mode) -->
+        <div id="code-right-rail" class="code-right-rail" style="display:none" aria-hidden="true" data-code-panel="tools">
+            <div class="code-rail-section">
+                <div class="code-rail-hdr">TOOL FLIGHTS</div>
+                <div id="code-tool-timeline" class="code-tool-timeline">
+                    <div class="code-tool-empty">Tool calls appear here during a run</div>
+                </div>
+            </div>
+            <div class="code-rail-section code-rail-ghost">
+                <div class="code-rail-hdr">GHOST / PATCHES</div>
+                <div id="ship-checkpoint-host" class="ship-checkpoint-host"></div>
+                <div id="code-ghost-host" class="code-ghost-host">
+                    <div class="code-ghost-empty">Pending file edits show here for Accept / Reject</div>
+                </div>
+            </div>
+        </div>
         </div>
 
         <!-- CODING TERMINAL PANEL (collapsible, coding mode only) -->
-        <div class="coding-terminal" id="coding-terminal" style="display:none">
+        <div class="coding-terminal" id="coding-terminal" style="display:none" data-code-panel="term">
             <div class="coding-terminal-header">
                 <span class="coding-terminal-title"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg> TERMINAL <span id="coding-terminal-cwd" class="coding-terminal-cwd">~/project</span></span>
                 <div class="coding-terminal-actions">
@@ -527,7 +604,31 @@
             </div>
             <div class="coding-terminal-input-row">
                 <span class="coding-terminal-prompt" id="coding-terminal-prompt">$</span>
-                <input type="text" class="coding-terminal-input" id="coding-terminal-input" placeholder="ls, cat, grep, tree…" spellcheck="false" autocomplete="off">
+                <input type="text" class="coding-terminal-input" id="coding-terminal-input" placeholder="ls, cat, grep, tree…" spellcheck="false" autocomplete="off" enterkeyhint="go">
+            </div>
+        </div>
+
+        <!-- Mobile "More" sheet: pro actions + packs (coding mode) -->
+        <div id="code-mobile-more" class="code-mobile-more" style="display:none" data-code-panel="more" aria-hidden="true">
+            <div class="code-mobile-more-inner">
+                <div class="code-mobile-more-hdr">CODE PRO</div>
+                <div class="code-mobile-more-actions" id="code-mobile-more-actions">
+                    <button type="button" class="code-m-action" data-m-action="checkpoint">⏪ Checkpoint</button>
+                    <button type="button" class="code-m-action" data-m-action="restore">↩ Restore</button>
+                    <button type="button" class="code-m-action" data-m-action="acceptall">✓ Accept all</button>
+                    <button type="button" class="code-m-action" data-m-action="rejectall">✕ Reject all</button>
+                    <button type="button" class="code-m-action" data-m-action="pr">⎇ PR set</button>
+                    <button type="button" class="code-m-action" data-m-action="verify">▶ Verify</button>
+                    <button type="button" class="code-m-action" data-m-action="swarm">🐝 Swarm</button>
+                    <button type="button" class="code-m-action" data-m-action="git">⎇ Git</button>
+                    <button type="button" class="code-m-action" data-m-action="folder">📁 Link folder</button>
+                    <button type="button" class="code-m-action" data-m-action="memory">🧠 Memory</button>
+                    <button type="button" class="code-m-action" data-m-action="packs">📦 Packs</button>
+                </div>
+                <p class="code-mobile-more-hint">
+                    Swipe left/right to switch tabs · Double-tap <strong>AETHER CODE</strong> to hide chrome ·
+                    Ghost <strong>Review</strong> FAB when patches are pending · type <code>@</code> to pin files
+                </p>
             </div>
         </div>
 
@@ -619,6 +720,8 @@
                             </button>
                         </div>
                     </div>
+                    <!-- Skill Runtime playbook runner (shown when a workflow is active) -->
+                    <div id="skill-runtime-bar" class="skill-runtime-bar" style="display:none" aria-live="polite"></div>
                     <!-- Textarea — full width -->
                     <textarea id="user-input" placeholder="Message AETHER…" rows="1" autocomplete="off" spellcheck="true"></textarea>
                     <!-- Stop (always present, visible when generating) -->
@@ -768,6 +871,40 @@
                         <option value="off">Off — use AGENT button only</option>
                     </select>
                     <div class="setting-hint">When enabled, AETHER detects multi-step tasks and offers autonomous execution</div>
+                </div>
+            </div>
+            <div class="settings-section">
+                <h4><svg class="ic-xs"><use href="#ic-layers"/></svg> APPEARANCE</h4>
+                <div class="setting-item">
+                    <label>Interface Theme</label>
+                    <div class="theme-picker" id="theme-picker" role="listbox" aria-label="Theme selector">
+                        <!-- filled by script.js from AETHER_Themes -->
+                    </div>
+                    <div class="setting-hint">Void / Plasma / Monolith for power users · <strong>Warm Ivory</strong> for a calm light UI</div>
+                </div>
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="wave-enabled-toggle" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">AETHER Wave visualizer</span>
+                    </label>
+                    <div class="setting-hint">Neural signal canvas in the status pane — TPS-reactive when streaming</div>
+                </div>
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="wave-calm-toggle" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Calm idle wave</span>
+                    </label>
+                    <div class="setting-hint">Flat line when idle — only animates while generating (recommended for Ivory)</div>
+                </div>
+                <div class="setting-item">
+                    <label class="toggle-label">
+                        <input type="checkbox" id="pane-compact-toggle">
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-text">Compact pane</span>
+                    </label>
+                    <div class="setting-hint">Hide TEMP/TPS metrics until streaming — cleaner for everyday use</div>
                 </div>
             </div>
             <div class="settings-section">
@@ -1097,8 +1234,13 @@
             <span id="ws-editor-lines">0 lines</span>
             <span id="ws-editor-chars">0 chars</span>
             <span id="ws-editor-cursor">Ln 1, Col 1</span>
+            <span id="ws-editor-gutter-badge" class="ws-editor-gutter-badge" style="display:none">ghost +/-</span>
+            <button type="button" class="ws-editor-tb-btn" id="ws-editor-toggle-gutter" style="display:none" title="Toggle live patch gutter">Gutter</button>
         </div>
-        <textarea id="ws-editor-textarea" class="ws-editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+        <div class="ws-editor-body" id="ws-editor-body">
+            <div id="ws-editor-live-gutter" class="ws-editor-live-gutter" style="display:none" aria-hidden="true"></div>
+            <textarea id="ws-editor-textarea" class="ws-editor-textarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+        </div>
     </div>
 </div>
 
@@ -1307,14 +1449,93 @@
   We know it's not "best practice." Best practice doesn't
   run entirely in a browser with zero backend.
   ═══════════════════════════════════════════════════════════ -->
+<!-- Core modules (zero-build ES-free globals — load before / after script.js) -->
+<script src="core/version.js"></script>
+<script src="core/safe-math.js"></script>
+<script src="core/capabilities.js"></script>
+<script src="core/beast-mode.js"></script>
+<script src="core/skill-utils.js"></script>
+<script src="core/aether-skills-pack.js"></script>
+<script src="core/aether-skill-runtime.js"></script>
+<script src="core/aether-deep-research.js"></script>
+<script src="core/vendor-loader.js"></script>
+<!-- Advanced Neural OS layer -->
+<script src="core/kernel.js"></script>
+<script src="core/aether-security.js"></script>
+<script src="core/aether-tool-runtime.js"></script>
+<script src="core/aether-rag-v2.js"></script>
+<script src="core/soul-os.js"></script>
+<script src="core/model-council.js"></script>
+<script src="core/thread-graph.js"></script>
+<script src="core/ghost-commits.js"></script>
+<script src="core/aether-code-pro.js"></script>
+<script src="core/aether-subagents.js"></script>
+<script src="core/aether-changeset.js"></script>
+<script src="core/aether-tool-packs.js"></script>
+<script src="core/aether-mcp-bridge.js"></script>
+<script src="core/aether-git-lite.js"></script>
+<script src="core/aether-code-mobile.js"></script>
+<script src="core/cognition-theater.js"></script>
+<script src="core/themes.js"></script>
+<script src="core/boot-cinematic.js"></script>
+<script src="core/aether-moat.js"></script>
+<script src="core/aether-ship.js"></script>
 <script src="script.js"></script>
+<script src="core/advanced-bridge.js"></script>
 <script>
     if(window.mermaid && mermaid.initialize) mermaid.initialize({startOnLoad:false,theme:'dark',themeVariables:{primaryColor:'#00f3ff',primaryTextColor:'#fff',primaryBorderColor:'#00f3ff',lineColor:'#00f3ff',background:'#0a0a0a',mainBkg:'#0a0a0a',textColor:'#e0e0e0',fontSize:'14px'}});
     (function(){
+        // Sync version labels from single source
+        if (window.AETHER_VERSION_LABEL) {
+            var sv = document.getElementById('status-version-label');
+            if (sv) sv.textContent = window.AETHER_VERSION_LABEL + ' BEAST';
+            var ap = document.getElementById('ap-sub-text');
+            if (ap) ap.textContent = 'Neural Interface ' + window.AETHER_VERSION_LABEL + ' · Beast Mode';
+            var sub = document.querySelector('.splash-subtitle');
+            if (sub) sub.textContent = 'NEURAL INTERFACE ' + window.AETHER_VERSION_LABEL + ' · BEAST MODE';
+        }
         const s=document.getElementById('splash-screen'),m=document.getElementById('main-app'),p=document.getElementById('splash-progress'),t=document.getElementById('splash-text');
-        const steps=[{p:15,t:'LOADING NEURAL CORE...'},{p:30,t:'INITIALIZING VECTOR ENGINE...'},{p:50,t:'CONFIGURING OCR...'},{p:70,t:'LOADING MATH LIBRARIES...'},{p:85,t:'BUILDING QUOTA SYSTEM...'},{p:100,t:'SYSTEM ONLINE'}];
-        let i=0;function next(){if(i<steps.length){p.style.width=steps[i].p+'%';t.textContent=steps[i].t;i++;setTimeout(next,350);}else{setTimeout(()=>{s.style.opacity='0';setTimeout(()=>{s.style.display='none';m.style.display='flex';m.style.opacity='0';setTimeout(()=>{m.style.transition='opacity 0.5s';m.style.opacity='1';},50);},500);},300);}}
+        const steps=[{p:15,t:'LOADING NEURAL CORE...'},{p:30,t:'INITIALIZING VECTOR ENGINE...'},{p:50,t:'CONFIGURING OCR...'},{p:70,t:'LOADING MATH LIBRARIES...'},{p:85,t:'ARMING BEAST MODE...'},{p:100,t:'SYSTEM ONLINE'}];
+        let i=0;function next(){if(i<steps.length){p.style.width=steps[i].p+'%';t.textContent=steps[i].t;i++;setTimeout(next,350);}else{setTimeout(()=>{s.style.opacity='0';setTimeout(()=>{s.style.display='none';m.style.display='flex';m.style.opacity='0';setTimeout(()=>{m.style.transition='opacity 0.5s';m.style.opacity='1';if(window.AETHER_showCapabilityBanner)AETHER_showCapabilityBanner(600);},50);},500);},300);}}
         window.addEventListener('load',()=>setTimeout(next,400));
+        // MODES + MORE collapsible toolbars (persist preference)
+        document.addEventListener('DOMContentLoaded', function(){
+            function wireToggle(btnId, panelId, openLabel, closedLabel, storageKey, defaultOpen) {
+                var btn = document.getElementById(btnId);
+                var panel = document.getElementById(panelId);
+                if (!btn || !panel) return;
+                var open = defaultOpen;
+                try {
+                    var saved = localStorage.getItem(storageKey);
+                    if (saved === '1') open = true;
+                    if (saved === '0') open = false;
+                } catch (e) {}
+                function apply() {
+                    panel.classList.toggle('collapsed', !open);
+                    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+                    btn.textContent = open ? openLabel : closedLabel;
+                    btn.classList.toggle('toggle-open', open);
+                    try { localStorage.setItem(storageKey, open ? '1' : '0'); } catch (e) {}
+                }
+                apply();
+                btn.addEventListener('click', function () {
+                    open = !open;
+                    apply();
+                });
+                // Expose for other modules (e.g. auto-expand MODES when Beast turns on)
+                btn._aetherSetOpen = function (v) { open = !!v; apply(); };
+            }
+            // Hero modes: collapsed by default (mere-mortal friendly)
+            wireToggle('btn-hero-modes', 'control-hero', 'MODES ▴', 'MODES ▾', 'aether_ui_modes_open', false);
+            // Advanced tools: collapsed by default
+            wireToggle('btn-more-tools', 'control-advanced', 'LESS ▴', 'MORE ▾', 'aether_ui_more_open', false);
+
+            // If Beast / coding / deep already active later, expand MODES once
+            window._aetherExpandModes = function () {
+                var b = document.getElementById('btn-hero-modes');
+                if (b && b._aetherSetOpen) b._aetherSetOpen(true);
+            };
+        });
     })();
 </script>
 <!-- Service Worker Registration -->
@@ -1342,7 +1563,7 @@ if (urlParams.get('action') === 'new') {
 <div id="aether-dialog-overlay" class="aether-dialog-overlay" style="display:none"></div>
 
 <!-- ═══════════════════════════════════════════════════════════
-  END OF AETHER NEURAL INTERFACE v5.14
+  END OF AETHER NEURAL INTERFACE v5.16 — BEAST MODE
   If you've read this far in the source code, you're either:
   a) A contributor trying to understand the architecture
   b) A competitor trying to figure out how we did it
@@ -1361,18 +1582,29 @@ if (urlParams.get('action') === 'new') {
   <div class="skills-modal-card">
     <div class="skills-modal-header">
       <div>
-        <div class="skills-modal-title"><span style="color:var(--neon-cyan)">⬡</span> AETHER Skills</div>
-        <div class="skills-modal-subtitle">Activate a specialised capability pack. AETHER's reasoning, tools, and output format adapt to match.</div>
+        <div class="skills-modal-title"><span style="color:var(--neon-cyan)">⬡</span> AETHER Skills <span class="skills-count-label" id="skills-count-label">Flagship</span></div>
+        <div class="skills-modal-subtitle">Curated flagship capability packs — reasoning, tools, workflows, and output format adapt on activate. Multi-skill supported.</div>
       </div>
       <button class="skills-modal-close" onclick="document.getElementById('skills-panel-modal').classList.add('hidden')">&times;</button>
     </div>
     <div class="skills-active-bar" id="skills-active-bar" style="display:none">
-      <span class="skills-active-label">Active skill:</span>
+      <span class="skills-active-label">Active:</span>
       <span class="skills-active-name" id="skills-active-name"></span>
-      <button class="skills-deactivate-btn" onclick="typeof deactivateSkill==='function'&&(deactivateSkill(),renderSkillsPanel())">Deactivate</button>
+      <button class="skills-deactivate-btn" onclick="typeof deactivateSkill==='function'&&(deactivateSkill(),renderSkillsPanel())">Clear all</button>
+    </div>
+    <div class="skills-presets-row" id="skills-presets-row">
+      <span class="skills-presets-label">Quick start:</span>
+      <button type="button" class="skills-preset-btn" onclick="typeof applySkillPreset==='function'&&applySkillPreset('builder')">⚒ Builder</button>
+      <button type="button" class="skills-preset-btn" onclick="typeof applySkillPreset==='function'&&applySkillPreset('researcher')">🔬 Researcher</button>
+      <button type="button" class="skills-preset-btn" onclick="typeof applySkillPreset==='function'&&applySkillPreset('ops')">📡 Ops</button>
+      <button type="button" class="skills-preset-btn" onclick="typeof openSkillRuntimeHelp==='function'&&openSkillRuntimeHelp()">▶ Runtime</button>
+      <span class="skills-presets-label" style="margin-left:8px">Policy:</span>
+      <button type="button" class="skills-preset-btn" onclick="typeof AETHER_SkillRuntime!=='undefined'&&AETHER_SkillRuntime.setPolicyMode('prefer')&&(typeof showNotification==='function'&&showNotification('Policy: prefer','info'))">prefer</button>
+      <button type="button" class="skills-preset-btn" onclick="typeof AETHER_SkillRuntime!=='undefined'&&AETHER_SkillRuntime.setPolicyMode('strict')&&(typeof showNotification==='function'&&showNotification('Policy: strict','info'))">strict</button>
+      <button type="button" class="skills-preset-btn" onclick="typeof AETHER_SkillRuntime!=='undefined'&&AETHER_SkillRuntime.setPolicyMode('off')&&(typeof showNotification==='function'&&showNotification('Policy: off','info'))">off</button>
     </div>
     <div class="skills-search-row">
-      <input type="text" id="skills-search" class="skills-search-input" placeholder="Search skills…" oninput="renderSkillsPanel()">
+      <input type="text" id="skills-search" class="skills-search-input" placeholder="Search skills, triggers, tiers…" oninput="renderSkillsPanel()">
       <div class="skills-filter-row" id="skills-filter-row">
         <button class="skills-cat-btn active" data-cat="all" onclick="setSkillsCat('all')">All</button>
         <button class="skills-cat-btn" data-cat="core" onclick="setSkillsCat('core')">Core</button>
@@ -1382,13 +1614,19 @@ if (urlParams.get('action') === 'new') {
         <button class="skills-cat-btn" data-cat="creative" onclick="setSkillsCat('creative')">Creative</button>
         <button class="skills-cat-btn" data-cat="utility" onclick="setSkillsCat('utility')">Utility</button>
       </div>
+      <div class="skills-filter-row skills-tier-row" id="skills-tier-row">
+        <button class="skills-tier-btn active" data-tier="all" onclick="setSkillsTier('all')">All tiers</button>
+        <button class="skills-tier-btn" data-tier="flagship" onclick="setSkillsTier('flagship')">Flagship</button>
+        <button class="skills-tier-btn" data-tier="engine" onclick="setSkillsTier('engine')">Engine</button>
+        <button class="skills-tier-btn" data-tier="pro" onclick="setSkillsTier('pro')">Pro</button>
+        <button class="skills-tier-btn" data-tier="standard" onclick="setSkillsTier('standard')">Standard</button>
+      </div>
     </div>
     <div class="skills-grid" id="skills-grid"><!-- rendered by JS --></div>
     <div class="skills-footer">
-      <!-- Why no community skills? -->
       <div class="skills-attribution">
         Skills are authored exclusively by <strong>The Architect</strong>.
-        <span class="skills-attribution-note">This isn't gatekeeping — a community skill is a prompt injection vector until there's a sandboxed runtime. Every skill ships from source, reviewed, and intentional.</span>
+        <span class="skills-attribution-note">No community upload path — unreviewed skills are a prompt-injection vector. Schema v2 · flagship pack ships from source.</span>
       </div>
     </div>
   </div>
@@ -1404,7 +1642,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   const btnAuth = document.getElementById('btn-auth');
   if (btnAuth) btnAuth.addEventListener('click', () => {
-    if (typeof openAuthModal === 'function') openAuthModal();
+    if (typeof window.openAccountPage === 'function') window.openAccountPage();
+    else if (typeof window.openAuthModal === 'function') window.openAuthModal();
   });
 });
 </script>
