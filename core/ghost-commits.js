@@ -398,9 +398,82 @@
     if (!item) return { ok: false, error: 'not found' };
 
     try {
-      var result = await forceWrite(item.path, item.after);
+      // Reliability: re-read disk before write; detect conflicts / already-applied
+      var current = await readCurrent(item.path, item.before);
+      var target = item.after != null ? String(item.after) : current;
+
+      if (current === target) {
+        item.status = 'accepted';
+        item.appliedAt = Date.now();
+        item.result = 'already applied (file matches target)';
+        if (item.hunks) {
+          item.hunks.forEach(function (h) {
+            if (h.status === 'pending') h.status = 'accepted';
+          });
+        }
+        saveQueue(q);
+        render();
+        markTreeDirty(item.path, false);
+        clearGutter(item.path);
+        if (g.showNotification) g.showNotification('Already applied: ' + item.path, 'info');
+        return { ok: true, result: item.result, already: true };
+      }
+
+      // If file drifted from propose-time "before", try remaining hunks or fail clearly
+      if (item.before != null && current !== String(item.before) && item.kind === 'patch' && item.hunks && item.hunks.length) {
+        var rebuilt = current;
+        var hunkErr = null;
+        for (var hi = 0; hi < item.hunks.length; hi++) {
+          var hk = item.hunks[hi];
+          if (hk.status && hk.status !== 'pending') continue;
+          var next = applyHunkToContent(rebuilt, hk);
+          if (next && next.error) {
+            hunkErr = next.error;
+            break;
+          }
+          rebuilt = next;
+          hk.status = 'accepted';
+        }
+        if (hunkErr) {
+          item.lastError = hunkErr;
+          saveQueue(q);
+          render();
+          if (g.showNotification) {
+            g.showNotification('Conflict on ' + item.path + ': ' + hunkErr + ' — re-patch or Accept all after refresh', 'error');
+          }
+          if (g.AETHER_Kernel) g.AETHER_Kernel.log('ghost.conflict', item.path + ' ' + hunkErr, 'write', { ok: false });
+          return { ok: false, error: hunkErr, conflict: true };
+        }
+        target = rebuilt;
+      } else if (item.before != null && current !== String(item.before) && item.kind !== 'patch') {
+        // Full-file ghost: file changed under us — still allow if user confirms via force path
+        // Prefer writing target but warn
+        if (g.showNotification) {
+          g.showNotification('File changed since Ghost — applying target content', 'warn');
+        }
+      }
+
+      // Write with one retry on transient failure
+      var result;
+      try {
+        result = await forceWrite(item.path, target);
+      } catch (e1) {
+        await new Promise(function (r) {
+          setTimeout(r, 120);
+        });
+        result = await forceWrite(item.path, target);
+      }
+
+      // Verify disk matches target (best-effort)
+      var verify = await readCurrent(item.path, target);
+      if (verify !== target && String(result).indexOf('ok=false') === -1) {
+        // soft warn — some virtual writers return without re-read fidelity
+        item.verifyWarning = 'post-write re-read mismatch';
+      }
+
       item.status = 'accepted';
       item.appliedAt = Date.now();
+      item.after = target;
       item.result = String(result);
       if (item.hunks) {
         item.hunks.forEach(function (h) {
@@ -419,16 +492,27 @@
           meta: { ghost: item.id, kind: item.kind },
         });
       }
+      if (g.AETHER_Moat && g.AETHER_Moat.record) {
+        try {
+          g.AETHER_Moat.record('ghost', { title: 'Ghost accepted', detail: item.path, meta: { id: item.id } });
+        } catch (e3) {}
+      }
       if (g.showNotification) g.showNotification('Accepted: ' + item.path, 'success');
-      // Sync open editor
       try {
         if (typeof g.__aetherSyncEditorAfterGhost === 'function') {
-          g.__aetherSyncEditorAfterGhost(item.path, item.after);
+          g.__aetherSyncEditorAfterGhost(item.path, target);
         }
       } catch (e2) {}
+      // Optional verify hook (lint/tests) after successful accept
+      try {
+        if (g.AETHER_CodePro && g.AETHER_CodePro.runVerify && localStorage.getItem('aether_code_auto_verify') === '1') {
+          g.AETHER_CodePro.runVerify();
+        }
+      } catch (e4) {}
       return { ok: true, result: result };
     } catch (e) {
       if (g.showNotification) g.showNotification('Accept failed: ' + e.message, 'error');
+      if (g.AETHER_Kernel) g.AETHER_Kernel.log('ghost.accept.fail', e.message || String(e), 'write', { ok: false });
       return { ok: false, error: e.message };
     }
   }

@@ -501,6 +501,79 @@
     return addText(content, meta);
   }
 
+  /**
+   * Index a linked project folder (File System Access API handle) into RAG.
+   * @param {FileSystemDirectoryHandle} rootHandle
+   * @param {object} opts { collection, maxFiles, maxBytes, onProgress }
+   */
+  async function indexFolder(rootHandle, opts) {
+    opts = opts || {};
+    if (!rootHandle) throw new Error('No folder handle');
+    await ensureReady();
+    var collection = opts.collection || 'project';
+    var maxFiles = opts.maxFiles || 200;
+    var maxBytes = opts.maxBytes || 400000; // ~400KB per file
+    var onProgress = opts.onProgress || function () {};
+    var skipRe = opts.skipRe || /(^|\/)(node_modules|\.git|dist|build|\.next|vendor|__pycache__|\.venv|venv)(\/|$)/i;
+    var allowExt = opts.allowExt || /\.(js|ts|tsx|jsx|mjs|cjs|py|rs|go|java|kt|md|txt|json|yml|yaml|toml|css|html|htm|svg|sh|bash|sql|graphql|vue|svelte|rb|php|c|cpp|h|hpp|cs|swift|r|ipynb)$/i;
+
+    var files = [];
+    async function walk(dirHandle, prefix) {
+      if (files.length >= maxFiles) return;
+      var it = dirHandle.entries();
+      for await (var ent of it) {
+        if (files.length >= maxFiles) break;
+        var name = ent[0];
+        var handle = ent[1];
+        var rel = prefix ? prefix + '/' + name : name;
+        if (skipRe.test(rel)) continue;
+        if (handle.kind === 'directory') {
+          await walk(handle, rel);
+        } else if (handle.kind === 'file') {
+          if (!allowExt.test(name) && !allowExt.test(rel)) continue;
+          files.push({ path: rel, handle: handle });
+        }
+      }
+    }
+    await walk(rootHandle, '');
+
+    var indexed = 0;
+    var skipped = 0;
+    var errors = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var file = await f.handle.getFile();
+        if (file.size > maxBytes) {
+          skipped++;
+          onProgress({ i: i + 1, total: files.length, path: f.path, status: 'skip-size' });
+          continue;
+        }
+        var text = await file.text();
+        if (!text || !String(text).trim()) {
+          skipped++;
+          continue;
+        }
+        await addFile(f.path, text, { collection: collection, source: f.path });
+        indexed++;
+        onProgress({ i: i + 1, total: files.length, path: f.path, status: 'ok' });
+      } catch (e) {
+        skipped++;
+        errors.push({ path: f.path, error: e.message || String(e) });
+        onProgress({ i: i + 1, total: files.length, path: f.path, status: 'err' });
+      }
+    }
+    return {
+      ok: true,
+      indexed: indexed,
+      skipped: skipped,
+      scanned: files.length,
+      collection: collection,
+      errors: errors.slice(0, 20),
+      stats: stats(),
+    };
+  }
+
   async function reindexFromLegacy(docs) {
     await ensureReady();
     var all = [];
@@ -789,6 +862,7 @@
     ready: ensureReady,
     addText: addText,
     addFile: addFile,
+    indexFolder: indexFolder,
     chunk: chunkText,
     search: search,
     clear: clear,

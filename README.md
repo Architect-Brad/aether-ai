@@ -1,10 +1,10 @@
-# AETHER Neural Interface v5.27 — Aether Code Pro
+# AETHER Neural Interface v5.36 — Agent Closure
 
-**Open-source. Local-first. No compromises.**
+**Open-source. Local-first. Zero backend.**
 
-Browser-native **neural operating system** with a competitive **terminal-agent coding shell**. Zero backend. Zero build step. GPL-3.0.
+Browser-native **neural operating system** with a competitive agent + coding shell. Zero build step. GPL-3.0.
 
-> *Toggle CODE — RAG v2 hybrid retrieve, tool runtime, MCP import, mobile tabs, Ghost, `fs_patch`.*
+> *Tool→model continue · Tool Runtime v2 · Ghost reliability · `/rag index` · `/shipcheck` · Moat provenance.*
 
 ## Quick start
 
@@ -20,67 +20,71 @@ Or double-click `index.html` (some STT/PWA features need localhost/HTTPS).
 
 | Mode | What it does |
 |------|----------------|
-| **AGENT** | Multi-step autonomous tool use |
-| **CODE** | Code Pro (desktop + **mobile tabs**): git · swarm · PR · packs · Ghost · `fs_patch` |
-| **DEEP** | Configurable deep research pipeline |
+| **AGENT** | Multi-step tool use + **tool→model continue loop** |
+| **CODE** | Code Pro: git · swarm · PR · packs · Ghost · `fs_patch` |
+| **DEEP** | Deep Research v3 pipeline |
 | **WS** | Workspace memory (FS or virtual) |
-| **BEAST** | Max autonomy — exhaustive research, direct FS writes, action-biased prompts |
-| **COUNCIL** | Multi-model parallel deliberation + synthesis |
+| **BEAST** | Max autonomy profile |
+| **COUNCIL** | Multi-model deliberation + synthesis |
 | **GRAPH** | Neural thread constellation |
 | **SETUP** | Provider + API key / local endpoint |
 
-Secondary tools under **MORE**: KERNEL (flight recorder), THEATER, THEME, Call, SOUL, Skills, RAG, …
+## Flagship systems (v5.30–5.36)
 
-### Neural OS slash commands
-`/whoami` `/council` `/kernel` `/graph` `/theme` `/theater` `/ghost` `/beast` `/version`
+| System | Slash / surface |
+|--------|------------------|
+| Tool Runtime v2 | native `tool_calls`, envelopes, retry, `/tools health` |
+| Agent Closure | auto re-entry after tools (depth 3–4) |
+| Ghost Commits | re-read / conflict / verify on Accept |
+| RAG v2 | hybrid BM25+vector · `/rag index` folder walk |
+| Ship gate | `/shipcheck` · `node scripts/shipcheck.mjs` |
+| Markdown GFM | `/mdtest` fixtures |
+| Skill Runtime | playbooks + policy modes |
+| Moat | provenance score + session record |
+| Kernel | flight recorder |
 
-## Architecture (honest)
+### Slash highlights
+
+`/shipcheck` `/rag index` `/rag search <q>` `/tools health` `/tooltest` `/mdtest` `/golden` `/moat` `/ghost` `/version` `/beast` `/whoami`
+
+## Architecture
 
 ```
 aether-ai/
-├── index.html              UI shell + modals
-├── script.js               Main app (~19k lines — being modularised)
-├── style.css               Design system
-├── sw.js                   Service worker (offline / PWA)
-├── manifest.json           PWA manifest
-├── logo.svg                App icon
-├── core/                   Zero-build modules (load before script.js)
-│   ├── version.js          Single version source of truth
-│   ├── safe-math.js        calculate tool without eval()
-│   ├── capabilities.js     CDN probe + degraded-mode banner
-│   └── beast-mode.js       Beast Mode profile
-├── discovery-skill.js      Search / maps / weather skill
-├── documents-supremacy.js  Office document skill
-└── tests/smoke.html        Critical-path smoke tests
+├── index.html + script.js + style.css
+├── sw.js · manifest.json · logo.svg
+├── core/                 # zero-build modules
+│   ├── version.js        # single version source of truth
+│   ├── aether-tool-runtime.js
+│   ├── aether-markdown.js
+│   ├── aether-rag-v2.js
+│   ├── ghost-commits.js
+│   ├── aether-ship.js
+│   └── …
+├── scripts/shipcheck.mjs # headless CI golden suite
+└── tests/                # smoke · golden-paths · md-golden
 ```
 
-**Not zero-dependency:** optional CDN libs (KaTeX, highlight.js, ONNX, Mermaid, …) enhance the UI. Core chat works if they fail; a capability banner reports what’s missing.
-
-## Smoke tests
+## Smoke / CI
 
 ```bash
+# Headless (CI)
+node scripts/shipcheck.mjs
+
+# Browser
 python3 -m http.server 3000
 # open http://localhost:3000/tests/smoke.html
+# open http://localhost:3000/tests/md-golden.html
 ```
-
-## Slash commands
-
-- `/version` — build + provider/tool counts  
-- `/beast` — toggle Beast Mode  
-- `/soul` — open self-model viewer  
-- `/settings` — SETUP  
 
 ## Security notes
 
-- API keys can be AES-256-GCM encrypted at rest (PBKDF2 100k).  
-- `calculate` does **not** use `eval`.  
-- Beast Mode skips coding-mode destructive tool confirmation — only enable when you trust the session.  
+- API keys can be AES-256-GCM encrypted at rest (PBKDF2 100k).
+- `calculate` does **not** use `eval`.
+- Path traversal blocked; shell allowlisted; MCP localhost-only; SSRF guard on private HTTP.
+- Beast Mode skips coding-mode destructive tool confirmation — only enable when you trust the session.
 - This is a browser app: XSS still equals full access to in-memory secrets.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md). Keep the zero-build ethos. Prefer new code in `core/` or skill files over growing `script.js` forever.
-
-## License
-
-GPL-3.0-or-later · Copyright (C) 2026 The Architect
+See `CONTRIBUTING.md`. License: GPL-3.0-or-later.

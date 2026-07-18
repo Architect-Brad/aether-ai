@@ -1,8 +1,8 @@
 {
   "name": "AETHER Neural Interface",
   "short_name": "AETHER",
-  "description": "Neural OS — Council, Kernel, Soul, Thread Graph, Ghost Commits, Beast Mode. GPL-3.0.",
-  "version": "5.17",
+  "description": "Neural OS — Agent Closure, Tool Runtime v2, Ghost, RAG index, Moat. GPL-3.0.",
+  "version": "5.36",
   "start_url": "./index.html",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],

@@ -10,7 +10,7 @@
 (function (g) {
   'use strict';
 
-  var VERSION = '5.33';
+  var VERSION = '5.36';
   var ONBOARD_KEY = 'aether_onboard_v1';
   var LAST_DR_KEY = 'aether_last_deep_research_v1';
   var GOLDEN_KEY = 'aether_golden_smoke_last';
@@ -573,6 +573,81 @@
     );
   }
 
+  /**
+   * Full release gate: golden paths + markdown fixtures + tool suite.
+   */
+  function runShipCheck(registry) {
+    var sections = [];
+    var allOk = true;
+
+    var golden = runGoldenPaths();
+    sections.push({ name: 'golden_paths', ok: golden.ok, passed: golden.passed, total: golden.total, results: golden.results });
+    if (!golden.ok) allOk = false;
+
+    if (g.AETHER_Markdown && g.AETHER_Markdown.runGoldenFixtures) {
+      var md = g.AETHER_Markdown.runGoldenFixtures();
+      sections.push({ name: 'markdown', ok: md.ok, passed: md.passed, total: md.total, results: md.results });
+      if (!md.ok) allOk = false;
+    } else {
+      sections.push({ name: 'markdown', ok: false, passed: 0, total: 0, results: [{ name: 'engine', pass: false, detail: 'offline' }] });
+      allOk = false;
+    }
+
+    if (g.AETHER_ToolRuntime && g.AETHER_ToolRuntime.runGoldenSuite) {
+      var tools = g.AETHER_ToolRuntime.runGoldenSuite(registry || g.TOOL_REGISTRY || g.__AETHER_TOOL_REGISTRY || {});
+      sections.push({ name: 'tools', ok: tools.ok, passed: tools.passed, total: tools.total, results: tools.results });
+      if (!tools.ok) allOk = false;
+    } else {
+      sections.push({ name: 'tools', ok: false, passed: 0, total: 0, results: [{ name: 'runtime', pass: false, detail: 'offline' }] });
+      allOk = false;
+    }
+
+    // Soft structural checks
+    var soft = [];
+    soft.push({ name: 'ghost_module', pass: !!(g.AETHER_Ghost && g.AETHER_Ghost.accept), detail: '' });
+    soft.push({ name: 'rag_indexFolder', pass: !!(g.AETHER_RAGv2 && g.AETHER_RAGv2.indexFolder), detail: '' });
+    soft.push({ name: 'moat_module', pass: !!g.AETHER_Moat, detail: '' });
+    var softPass = soft.filter(function (s) { return s.pass; }).length;
+    sections.push({ name: 'modules', ok: softPass === soft.length, passed: softPass, total: soft.length, results: soft });
+    if (softPass < soft.length) allOk = false;
+
+    var out = {
+      ok: allOk,
+      version: VERSION,
+      product: g.AETHER_VERSION || '',
+      at: Date.now(),
+      sections: sections,
+    };
+    try {
+      localStorage.setItem('aether_shipcheck_last', JSON.stringify({ ok: out.ok, at: out.at, product: out.product }));
+    } catch (e) {}
+    if (g.AETHER_Moat && g.AETHER_Moat.record) {
+      g.AETHER_Moat.record('session', {
+        title: 'Shipcheck ' + (out.ok ? 'PASS' : 'FAIL'),
+        detail: sections.map(function (s) { return s.name + ':' + s.passed + '/' + s.total; }).join(' '),
+      });
+    }
+    return out;
+  }
+
+  function shipCheckMarkdown(r) {
+    r = r || runShipCheck();
+    var lines = [
+      '**Shipcheck** — ' + (r.ok ? '✓ PASS' : '✗ FAIL') +
+        ' · product v' + (r.product || '?') +
+        ' · ship ' + r.version,
+      '',
+    ];
+    (r.sections || []).forEach(function (sec) {
+      lines.push('### ' + sec.name + ' — ' + (sec.ok ? '✓' : '✗') + ' ' + sec.passed + '/' + sec.total);
+      (sec.results || []).forEach(function (x) {
+        lines.push('- ' + (x.pass ? '✓' : '✗') + ' `' + x.name + '`' + (x.detail ? ' — ' + x.detail : ''));
+      });
+      lines.push('');
+    });
+    return lines.join('\n');
+  }
+
   // ── RAG UX helpers ─────────────────────────────────────────
 
   async function ragIndexFolderHint() {
@@ -677,6 +752,8 @@
     shouldShowOnboard: shouldShowOnboard,
     runGoldenPaths: runGoldenPaths,
     goldenMarkdown: goldenMarkdown,
+    runShipCheck: runShipCheck,
+    shipCheckMarkdown: shipCheckMarkdown,
     ragQuickStatsMarkdown: ragQuickStatsMarkdown,
     updateOfflineBanner: updateOfflineBanner,
     init: init,

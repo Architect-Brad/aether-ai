@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AETHER v5.16 Smoke Tests</title>
+  <title>AETHER Smoke Tests</title>
   <style>
     body { font-family: ui-monospace, monospace; background: #020308; color: #c8d8e8; padding: 24px; }
     h1 { color: #00f3ff; font-size: 1.1rem; letter-spacing: 0.08em; }
@@ -13,7 +13,7 @@
   </style>
 </head>
 <body>
-  <h1>⬡ AETHER SMOKE · v5.16 Beast Mode</h1>
+  <h1>⬡ AETHER SMOKE</h1>
   <div id="out"></div>
   <div id="summary"></div>
 
@@ -21,6 +21,9 @@
   <script src="../core/safe-math.js"></script>
   <script src="../core/capabilities.js"></script>
   <script src="../core/beast-mode.js"></script>
+  <script src="../core/aether-markdown.js"></script>
+  <script src="../core/aether-tool-runtime.js"></script>
+  <script src="../core/aether-ship.js"></script>
   <script>
     const out = document.getElementById('out');
     let pass = 0, fail = 0;
@@ -34,10 +37,10 @@
       out.appendChild(div);
     }
 
-    // Version
-    assert('AETHER_VERSION is 5.16', window.AETHER_VERSION === '5.16', window.AETHER_VERSION);
-    assert('AETHER_CODENAME is Beast Mode', window.AETHER_CODENAME === 'Beast Mode');
-    assert('AETHER_VERSION_LABEL', window.AETHER_VERSION_LABEL === 'v5.16');
+    // Version (pin to core/version.js — never hardcode outdated expected)
+    assert('AETHER_VERSION set', !!window.AETHER_VERSION && /^\d+\.\d+/.test(window.AETHER_VERSION), window.AETHER_VERSION);
+    assert('AETHER_CODENAME set', !!(window.AETHER_CODENAME && window.AETHER_CODENAME.length > 2), window.AETHER_CODENAME);
+    assert('AETHER_VERSION_LABEL', window.AETHER_VERSION_LABEL === 'v' + window.AETHER_VERSION);
     assert('AETHER_META present', !!(window.AETHER_META && window.AETHER_META.license));
 
     // Safe math
@@ -60,6 +63,29 @@
     assert('beast disables', AETHER_Beast.isEnabled() === false);
     assert('beast prompt empty when off', AETHER_Beast.systemPromptAddon() === '');
 
+    // Markdown + tools + ship
+    assert('Markdown engine', !!(window.AETHER_Markdown && AETHER_Markdown.runGoldenFixtures));
+    if (window.AETHER_Markdown) {
+      const md = AETHER_Markdown.runGoldenFixtures();
+      assert('markdown golden', md.ok, md.passed + '/' + md.total);
+    }
+    assert('Tool runtime', !!(window.AETHER_ToolRuntime && AETHER_ToolRuntime.runGoldenSuite));
+    if (window.AETHER_ToolRuntime) {
+      const tools = AETHER_ToolRuntime.runGoldenSuite({});
+      assert('tools golden', tools.ok, tools.passed + '/' + tools.total);
+    }
+    assert('Ship layer', !!(window.AETHER_Ship && AETHER_Ship.runShipCheck));
+    if (window.AETHER_Ship && AETHER_Ship.runShipCheck) {
+      // soft stubs so modules section can pass in isolation
+      window.AETHER_Ghost = window.AETHER_Ghost || { accept: async () => ({ ok: true }) };
+      window.AETHER_RAGv2 = window.AETHER_RAGv2 || { indexFolder: async () => ({ ok: true }) };
+      window.AETHER_Moat = window.AETHER_Moat || {};
+      window.AETHER_CodePro = window.AETHER_CodePro || { listCheckpoints: () => [] };
+      window.AETHER_ChangeSet = window.AETHER_ChangeSet || { createFromPending: () => null };
+      const sc = AETHER_Ship.runShipCheck({});
+      assert('shipcheck runs', !!sc && typeof sc.ok === 'boolean', sc && sc.sections ? sc.sections.map(s => s.name + ':' + s.passed + '/' + s.total).join(' ') : '');
+    }
+
     // Capabilities probe
     assert('probe exists', typeof AETHER_probeCapabilities === 'function');
     const report = AETHER_probeCapabilities();
@@ -69,29 +95,30 @@
     Promise.all([
       fetch('../manifest.json').then(r => ({ name: 'manifest.json', ok: r.ok, json: r.ok ? r.json() : null })).catch(() => ({ name: 'manifest.json', ok: false })),
       fetch('../logo.svg').then(r => ({ name: 'logo.svg', ok: r.ok })).catch(() => ({ name: 'logo.svg', ok: false })),
-      fetch('../sw.js').then(r => r.text()).then(t => ({ name: 'sw.js v5.16', ok: t.includes('v5.16') })).catch(() => ({ name: 'sw.js v5.16', ok: false })),
+      fetch('../sw.js').then(r => r.text()).then(t => ({
+        name: 'sw.js cache matches version',
+        ok: t.includes('aether-v' + window.AETHER_VERSION),
+      })).catch(() => ({ name: 'sw.js', ok: false })),
       fetch('../core/version.js').then(r => ({ name: 'core/version.js', ok: r.ok })).catch(() => ({ name: 'core/version.js', ok: false })),
+      fetch('../scripts/shipcheck.mjs').then(r => ({ name: 'scripts/shipcheck.mjs', ok: r.ok })).catch(() => ({ name: 'scripts/shipcheck.mjs', ok: false })),
     ]).then(async results => {
       for (const r of results) {
         if (r.json) {
           const j = await r.json;
           assert(r.name + ' fetch', r.ok);
-          if (j) assert('manifest version 5.16', j.version === '5.16', j.version);
+          if (j) assert('manifest version matches', j.version === window.AETHER_VERSION, j.version + ' vs ' + window.AETHER_VERSION);
         } else {
           assert(r.name, r.ok);
         }
       }
       finish();
-    });
+    }).catch(finish);
 
     function finish() {
-      const s = document.getElementById('summary');
-      s.className = fail ? 'fail' : 'pass';
-      s.textContent = fail
-        ? `FAILED: ${fail} · passed ${pass}`
-        : `ALL GREEN: ${pass} assertions`;
+      const el = document.getElementById('summary');
+      el.className = fail ? 'fail' : 'pass';
+      el.textContent = (fail ? 'FAIL' : 'PASS') + ' · ' + pass + ' passed · ' + fail + ' failed · product v' + window.AETHER_VERSION;
       document.title = (fail ? 'FAIL' : 'PASS') + ' · AETHER smoke';
-      console.log('[AETHER smoke]', { pass, fail });
     }
   </script>
 </body>

@@ -7,8 +7,8 @@
  */
 (function (g) {
   'use strict';
-  var VERSION = '5.35';
-  var CODENAME = 'Tool Runtime v2';
+  var VERSION = '5.36';
+  var CODENAME = 'Agent Closure';
   var BUILD = '2026.07.18';
 
   g.AETHER_VERSION = VERSION;

@@ -14820,6 +14820,42 @@ ${result}`));
                 const bracketContext = bracketResults.map(r => '[' + r.name + ' result]\n' + String(r.result)).join('\n\n');
                 if (conv) conv.messages.push({ role: 'system', content: '[Tool results · ' + (collected.source || 'text') + ']\n' + bracketContext });
                 smoothScrollToBottom();
+
+                // ── Tool → model continue loop (native-first agent closure) ──
+                // Feed results back into a follow-up turn so the model can finish.
+                // Cap depth to avoid runaway API spend. Works in agent + CODE + chat.
+                try {
+                    if (!state._toolContinueDepth) state._toolContinueDepth = {};
+                    var depth = state._toolContinueDepth[convId] || 0;
+                    var maxDepth = (state.codingMode || (state.agentMode && state.agentMode !== 'off')) ? 4 : 3;
+                    var anyOk = bracketResults.some(function (r) {
+                        return r && r.result && !/ok=false/i.test(String(r.result).slice(0, 80));
+                    });
+                    if (anyOk && depth < maxDepth && convId === state.currentConversationId) {
+                        state._toolContinueDepth[convId] = depth + 1;
+                        var summaries = bracketResults.map(function (r) {
+                            var body = String(r.result || '');
+                            var sum = (body.match(/summary:\s*([^\n]+)/) || [])[1];
+                            return '- `' + r.name + '`: ' + (sum || body.slice(0, 120).replace(/\n/g, ' '));
+                        }).join('\n');
+                        var contMsg =
+                            'Tool results received (' + (collected.source || 'text') + ', round ' + (depth + 1) + '/' + maxDepth + '):\n' +
+                            summaries +
+                            '\n\nContinue: use the results above. Call more tools if needed, otherwise give the final answer. Prefer native tool_calls when available.';
+                        setTimeout(function () {
+                            if (state.processingConversations[convId]) return;
+                            if (convId !== state.currentConversationId) return;
+                            var sendEvt = new Event('aether-auto-continue');
+                            sendEvt.autoMessage = contMsg;
+                            sendEvt.toolContinue = true;
+                            document.dispatchEvent(sendEvt);
+                        }, 700);
+                    } else {
+                        state._toolContinueDepth[convId] = 0;
+                    }
+                } catch (_) {
+                    try { state._toolContinueDepth[convId] = 0; } catch (e2) {}
+                }
             }
         } catch(e) { /* tool execution must never crash the stream */ }
 
@@ -15060,6 +15096,14 @@ ${result}`));
         const conv=getCurrentConversation();
         const convId=conv.id;
         if(state.processingConversations[convId]){ showNotification('This conversation is still generating','warn'); return; }
+
+        // User-initiated turns reset tool-continue depth (auto-continue preserves it)
+        if (!window.__aetherIsAutoContinue) {
+            try {
+                if (!state._toolContinueDepth) state._toolContinueDepth = {};
+                state._toolContinueDepth[convId] = 0;
+            } catch (_) {}
+        }
 
         // ─── CODE PRO: expand @mentions / pins into hidden context ──
         let codeProContext = '';
@@ -15780,13 +15824,18 @@ ${result}`));
         }
     }
 
-    // ── Auto-continue listener for AETHER Code turn loop ──────
+    // ── Auto-continue: tool→model loop + CODE plan steps ──────
+    // toolContinue=true works in agent/chat/CODE; plan continue stays CODE-only.
     document.addEventListener('aether-auto-continue', (e) => {
-        if (!state.codingMode) return;
+        const isToolContinue = !!(e && e.toolContinue);
+        if (!state.codingMode && !isToolContinue) return;
         const inp = document.getElementById('user-input');
         if (inp) {
             inp.value = e.autoMessage || 'Continue with the next step.';
-            sendMessage();
+            window.__aetherIsAutoContinue = true;
+            Promise.resolve(sendMessage()).finally(function () {
+                window.__aetherIsAutoContinue = false;
+            });
         }
     });
 
@@ -17221,6 +17270,16 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
             if (typeof AETHER_Ship === 'undefined') { addSystemMessage('Ship layer offline'); return; }
             addSystemMessage(AETHER_Ship.goldenMarkdown(AETHER_Ship.runGoldenPaths()));
         } },
+        { id:'shipcheck', label:'/shipcheck', desc:'Full release gate: golden + markdown + tools', group:'System', action: () => {
+            if (typeof AETHER_Ship === 'undefined' || !AETHER_Ship.runShipCheck) {
+                addSystemMessage('Ship layer offline');
+                return;
+            }
+            showNotification('Running shipcheck…', 'info');
+            const r = AETHER_Ship.runShipCheck(typeof TOOL_REGISTRY !== 'undefined' ? TOOL_REGISTRY : {});
+            addSystemMessage(AETHER_Ship.shipCheckMarkdown(r));
+            showNotification(r.ok ? 'Shipcheck PASS' : 'Shipcheck FAIL', r.ok ? 'success' : 'warn');
+        } },
         { id:'mdtest',    label:'/mdtest', desc:'Markdown engine golden fixtures', group:'System', action: () => {
             if (typeof AETHER_Markdown === 'undefined' || !AETHER_Markdown.runGoldenFixtures) {
                 addSystemMessage('Markdown engine offline');
@@ -17583,7 +17642,7 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
             }
             AETHER_MCP.importJSON(a);
         } },
-        { id:'rag',       label:'/rag [cmd]',   desc:'RAG v2: stats|search|clear|hybrid on|off',      group:'System', action: async (arg) => {
+        { id:'rag',       label:'/rag [cmd]',   desc:'RAG v2: stats|search|clear|hybrid|index',      group:'System', action: async (arg) => {
             const a = (arg || '').trim();
             if (typeof AETHER_RAGv2 === 'undefined') {
                 addSystemMessage('**RAG** — legacy BM25 only (`' + (RAG.totalDocs || 0) + '` docs). RAG v2 module not loaded.');
@@ -17600,7 +17659,7 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                     (s.collections.length
                         ? s.collections.map(function (c) { return '  - `' + c.id + '`: ' + c.chunks + ' chunks'; }).join('\n')
                         : '  _(empty)_') +
-                    '\n\nCommands: `/rag search <q>` · `/rag clear [collection]` · `/rag hybrid on|off` · `/rag index` (re-run project index)'
+                    '\n\nCommands: `/rag search <q>` · `/rag clear [collection]` · `/rag hybrid on|off` · `/rag index` (index linked CODE folder)'
                 );
                 return;
             }
@@ -17616,6 +17675,56 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
                 const col = a.replace(/^clear\s*/i, '').trim() || null;
                 await AETHER_RAGv2.clear(col || undefined);
                 showNotification(col ? 'Cleared collection ' + col : 'RAG cleared', 'info');
+                return;
+            }
+            if (/^index\b/i.test(a)) {
+                if (!codingFolderHandle) {
+                    addSystemMessage('**RAG index** — link a CODE folder first (File System Access), then `/rag index`.');
+                    showNotification('No folder linked', 'warn');
+                    return;
+                }
+                if (typeof AETHER_RAGv2.indexFolder !== 'function') {
+                    addSystemMessage('**RAG index** — `indexFolder` not available in this build.');
+                    return;
+                }
+                showNotification('Indexing folder…', 'info');
+                try {
+                    const colMatch = a.match(/^index\s+(\S+)/i);
+                    const collection = (colMatch && colMatch[1]) || 'project';
+                    let lastPath = '';
+                    const result = await AETHER_RAGv2.indexFolder(codingFolderHandle, {
+                        collection: collection,
+                        maxFiles: 200,
+                        onProgress: function (p) {
+                            if (p && p.path) lastPath = p.path;
+                        },
+                    });
+                    const s = result.stats || AETHER_RAGv2.stats();
+                    addSystemMessage(
+                        '**RAG index** — `' + (codingFolderHandle.name || 'folder') + '`\n\n' +
+                        '- Indexed: **' + result.indexed + '** / scanned ' + result.scanned + '\n' +
+                        '- Skipped: **' + result.skipped + '**\n' +
+                        '- Collection: `' + result.collection + '`\n' +
+                        '- Total chunks: **' + (s.chunks != null ? s.chunks : '?') + '**\n' +
+                        (result.errors && result.errors.length
+                            ? '- Errors (sample): ' + result.errors.slice(0, 3).map(function (e) { return '`' + e.path + '`'; }).join(', ') + '\n'
+                            : '') +
+                        (lastPath ? '- Last: `' + lastPath + '`\n' : '') +
+                        '\nTry `/rag search <query>` next.'
+                    );
+                    if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.record) {
+                        try {
+                            AETHER_Moat.record('rag', {
+                                title: 'Folder indexed',
+                                detail: result.indexed + ' files → ' + result.collection,
+                            });
+                        } catch (_) {}
+                    }
+                    showNotification('Indexed ' + result.indexed + ' files', 'success');
+                } catch (e) {
+                    showNotification('Index failed: ' + (e.message || e), 'error');
+                    addSystemMessage('**RAG index failed:** ' + (e.message || String(e)));
+                }
                 return;
             }
             if (/^search\s+/i.test(a)) {
@@ -17814,7 +17923,19 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.35', date: 'July 2026', tag: 'latest',
+            version: 'v5.36', date: 'July 2026', tag: 'latest',
+            headline: 'Agent Closure — tool→model loop, shipcheck, Ghost reliability, RAG index',
+            notes: [
+                { type:'new',  text:'TOOL CONTINUE — after native/text tools, model re-enters (depth 3–4); works outside CODE' },
+                { type:'new',  text:'/shipcheck — full gate: golden paths + markdown + tools + modules' },
+                { type:'new',  text:'CI — node scripts/shipcheck.mjs for headless smoke' },
+                { type:'fix',  text:'GHOST ACCEPT — re-read before write, conflict recovery, post-write verify, moat record' },
+                { type:'new',  text:'/rag index — walk linked CODE folder into RAG v2 project collection' },
+                { type:'new',  text:'DEPTH RESET — user turns clear continue depth; auto-continue preserves it' },
+            ],
+        },
+        {
+            version: 'v5.35', date: 'July 2026', tag: '',
             headline: 'Tool Runtime v2 — native tool_calls, structured results, retry, health',
             notes: [
                 { type:'new',  text:'NATIVE FIRST — prefer OpenAI/Anthropic tool_calls; [[bracket]] is fallback' },
