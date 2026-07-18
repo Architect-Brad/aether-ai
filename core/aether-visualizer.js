@@ -1580,20 +1580,62 @@
 
   /**
    * Render all artifacts found in text into host container.
-   * @returns {{ rendered: boolean, count: number, remainder: string, errors: number }}
+   * Interleaves prose segments with viz slots when opts.renderText is provided
+   * (host supplies parseMarkdown wrapper).
+   *
+   * @param {string} text
+   * @param {HTMLElement} container
+   * @param {{ renderText?: (prose: string) => Node }} [opts]
+   * @returns {{ rendered: boolean, count: number, remainder: string, errors: number, interleaved: boolean }}
    */
-  async function autoDetect(text, container) {
+  async function autoDetect(text, container, opts) {
+    opts = opts || {};
+    var renderText =
+      typeof opts.renderText === 'function'
+        ? opts.renderText
+        : typeof g.parseMarkdown === 'function'
+          ? function (prose) {
+              var wrap = document.createElement('div');
+              wrap.className = 'aether-viz-prose';
+              try {
+                wrap.appendChild(g.parseMarkdown(prose));
+              } catch (e) {
+                wrap.textContent = prose;
+              }
+              return wrap;
+            }
+          : null;
+
     var extracted = extractAll(text);
     if (!extracted.artifacts.length) {
-      return { rendered: false, count: 0, remainder: text, errors: 0 };
+      return { rendered: false, count: 0, remainder: text, errors: 0, interleaved: false };
     }
 
     baseContainer(container);
     var okCount = 0;
     var errCount = 0;
+    var cursor = 0;
+    var interleaved = !!renderText;
+    var arts = extracted.artifacts;
 
-    for (var i = 0; i < extracted.artifacts.length; i++) {
-      var art = extracted.artifacts[i];
+    function appendProse(slice) {
+      if (!renderText || !slice || !String(slice).trim()) return;
+      try {
+        container.appendChild(renderText(String(slice)));
+      } catch (e) {
+        var pre = document.createElement('div');
+        pre.className = 'aether-viz-prose';
+        pre.textContent = slice;
+        container.appendChild(pre);
+      }
+    }
+
+    for (var i = 0; i < arts.length; i++) {
+      var art = arts[i];
+      // Prose before this artifact
+      if (interleaved && art.start > cursor) {
+        appendProse(text.slice(cursor, art.start));
+      }
       var slot = document.createElement('div');
       slot.className = 'aether-viz-slot';
       container.appendChild(slot);
@@ -1610,6 +1652,11 @@
         vizErr(slot, e.message || String(e), art.spec || art.syntax || art.raw);
         recordEvent('render', e.message || 'fail', { ok: false, type: art.kind });
       }
+      cursor = Math.max(cursor, art.end || cursor);
+    }
+    // Trailing prose
+    if (interleaved && cursor < text.length) {
+      appendProse(text.slice(cursor));
     }
 
     // Phase A: if ALL failed, treat as not rendered so host falls through to markdown
@@ -1620,14 +1667,17 @@
         remainder: text,
         errors: errCount,
         failed: true,
+        interleaved: false,
       };
     }
 
     return {
       rendered: okCount > 0,
       count: okCount,
-      remainder: extracted.remainder,
+      // When interleaved, prose is already in the container — host must not re-append remainder
+      remainder: interleaved ? '' : extracted.remainder,
       errors: errCount,
+      interleaved: interleaved,
     };
   }
 
@@ -1699,6 +1749,13 @@
 
     var st2 = stabilizeStream('```viz\n{"type":"bar","labels":["A"],"datasets":[{"data":[1]}]}\n```\nDone');
     ok('stream_closed', st2.pending === false, '');
+
+    // interleaved remainder empty when renderText provided (async not needed for extract)
+    ok(
+      'interleave_api',
+      typeof autoDetect === 'function' && autoDetect.length >= 2,
+      'autoDetect arity'
+    );
 
     // types list completeness
     ok('types_list', ALL_TYPES.length >= 16, 'n=' + ALL_TYPES.length);

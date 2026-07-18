@@ -776,9 +776,13 @@
       // Poll a few times so we don't race the persona wizard finish.
       function tryShipOnboard(attempt) {
         if (typeof document === 'undefined' || !document.getElementById('user-input')) return;
+        // Already finished ship tour
+        var s = onboardState();
+        if (s.done || s.skipped) return;
         if (!shouldShowOnboard()) {
-          // Persona may still be open — retry briefly
-          if (attempt < 20 && !onboardState().done && !onboardState().skipped) {
+          // Persona may still be open — keep polling (no hard 30s cut-off)
+          // Cap only at very long sessions (~15 min) so we don't leak forever
+          if (attempt < 600) {
             setTimeout(function () {
               tryShipOnboard(attempt + 1);
             }, 1500);

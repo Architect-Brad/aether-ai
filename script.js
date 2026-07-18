@@ -1472,6 +1472,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let codingFolderHandle = null; // FileSystemDirectoryHandle
 
+    /** Always mirror local handle to window for modules (Viz export, attach-FS, etc.) */
+    function setCodingFolderHandle(handle) {
+        codingFolderHandle = handle || null;
+        try {
+            window.codingFolderHandle = codingFolderHandle;
+        } catch (_) {}
+        return codingFolderHandle;
+    }
+    window.setCodingFolderHandle = setCodingFolderHandle;
+
     // ── Capability detection ──────────────────────────────────
     const FS_SUPPORTED   = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
     const FS_FILE_PICKER = typeof window !== 'undefined' && 'showOpenFilePicker' in window;
@@ -1480,8 +1490,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function openCodingFolder() {
         if (!FS_SUPPORTED) { showNotification('File System Access API not supported. Use Chrome 86+ or Edge 86+.', 'warn'); return; }
         try {
-            codingFolderHandle = await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
-            try { window.codingFolderHandle = codingFolderHandle; } catch (_) {}
+            setCodingFolderHandle(await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' }));
             registerFSTools();
             updateCodingFolderUI();
             saveFolderName(codingFolderHandle.name);
@@ -12958,6 +12967,8 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     function smoothScrollToBottom() { setTimeout(()=>display.scrollTo({top:display.scrollHeight,behavior:'smooth'}),80); }
     function showNotification(msg, type='info') {
         const c = $('notification-container'); if(!c) return;
+        // Normalize aliases (warning → warn)
+        if (type === 'warning') type = 'warn';
         // Stacking limit — max 5 visible; remove oldest
         while (c.children.length >= 5) {
             var oldest = c.children[0];
@@ -14298,23 +14309,26 @@ ${result}`));
                     try { vizRendered = await window._tryDiscoverySkillRender?.(sanitized, aetherMsg) || false; } catch(e) {}
                 }
 
-                // Step 3: AetherVisualizer v2 — multi-spec, remainder markdown, fail→markdown
+                // Step 3: AetherVisualizer v2 — multi-spec, interleaved prose+artifacts
                 if (!vizRendered && window.AetherVisualizer) {
                     try {
                         const vizEl = document.createElement('div');
                         vizEl.className = 'aether-viz-container';
-                        const r = await window.AetherVisualizer.autoDetect(sanitized, vizEl);
+                        const r = await window.AetherVisualizer.autoDetect(sanitized, vizEl, {
+                            renderText: function (prose) {
+                                const wrap = document.createElement('div');
+                                wrap.className = 'aether-viz-prose';
+                                wrap.appendChild(parseMarkdown(prose));
+                                return wrap;
+                            },
+                        });
                         const didRender = r && (r.rendered === true || r === true);
                         if (didRender) {
                             vizRendered = true;
-                            const remainder = (r && typeof r.remainder === 'string')
-                                ? r.remainder
-                                : sanitized
-                                    .replace(/```(?:aether-viz|viz|json|chart|visuali[sz]er|mermaid)[\s\S]*?```/gi, '')
-                                    .trim();
-                            if (remainder) {
+                            // When not interleaved, host still places remainder markdown first
+                            if (!r.interleaved && r.remainder) {
                                 const mdEl = document.createElement('div');
-                                mdEl.appendChild(parseMarkdown(remainder));
+                                mdEl.appendChild(parseMarkdown(r.remainder));
                                 aetherMsg.appendChild(mdEl);
                             }
                             aetherMsg.appendChild(vizEl);
@@ -14494,6 +14508,7 @@ ${result}`));
                 const hasUsefulResults = xmlToolResults.some(r => r.result && r.result.length > 80);
                 const modelWroteSomething = cleanContent.length > 30;
                 if (!modelWroteSomething && hasUsefulResults && convId === state.currentConversationId) {
+                    // Async synth follow-up — do NOT return early (would skip save / coding continue / final paths)
                     setTimeout(async () => {
                         try {
                             const synthPrompt = 'Based on the search results above, answer the original query concisely with citations.';
@@ -14510,7 +14525,6 @@ ${result}`));
                             }
                         } catch(e) {}
                     }, 300);
-                    return fullContent;
                 }
             }
         }
@@ -14625,14 +14639,20 @@ ${result}`));
                         if (!vizRendered2 && window.AetherVisualizer) {
                             const vizEl2 = document.createElement('div');
                             vizEl2.className = 'aether-viz-container';
-                            const r2 = await window.AetherVisualizer.autoDetect(renderContent, vizEl2);
+                            const r2 = await window.AetherVisualizer.autoDetect(renderContent, vizEl2, {
+                                renderText: function (prose) {
+                                    const wrap = document.createElement('div');
+                                    wrap.className = 'aether-viz-prose';
+                                    wrap.appendChild(parseMarkdown(prose));
+                                    return wrap;
+                                },
+                            });
                             const did2 = r2 && (r2.rendered === true || r2 === true);
                             if (did2) {
                                 vizRendered2 = true;
-                                const rem2 = (r2 && typeof r2.remainder === 'string') ? r2.remainder : '';
-                                if (rem2) {
+                                if (!r2.interleaved && r2.remainder) {
                                     const mdEl2 = document.createElement('div');
-                                    mdEl2.appendChild(parseMarkdown(rem2));
+                                    mdEl2.appendChild(parseMarkdown(r2.remainder));
                                     aetherMsg.appendChild(mdEl2);
                                 }
                                 aetherMsg.appendChild(vizEl2);
@@ -15405,13 +15425,19 @@ ${result}`));
                             if (!vizNS && window.AetherVisualizer) {
                                 const vizElNS = document.createElement('div');
                                 vizElNS.className = 'aether-viz-container';
-                                const rNS = await window.AetherVisualizer.autoDetect(responseText, vizElNS);
+                                const rNS = await window.AetherVisualizer.autoDetect(responseText, vizElNS, {
+                                    renderText: function (prose) {
+                                        const wrap = document.createElement('div');
+                                        wrap.className = 'aether-viz-prose';
+                                        wrap.appendChild(parseMarkdown(prose));
+                                        return wrap;
+                                    },
+                                });
                                 if (rNS && (rNS.rendered === true || rNS === true)) {
                                     vizNS = true;
-                                    const remNS = (rNS && typeof rNS.remainder === 'string') ? rNS.remainder : '';
-                                    if (remNS) {
+                                    if (!rNS.interleaved && rNS.remainder) {
                                         const mdNS = document.createElement('div');
-                                        mdNS.appendChild(parseMarkdown(remNS));
+                                        mdNS.appendChild(parseMarkdown(rNS.remainder));
                                         aetherMsg.appendChild(mdNS);
                                     }
                                     aetherMsg.appendChild(vizElNS);
@@ -20901,13 +20927,21 @@ Format the final summary as a single, clean text block divided into the five lab
         const overlay = document.getElementById('onboarding-overlay');
         if(overlay){ overlay.classList.remove('visible'); setTimeout(()=>overlay.remove(),400); }
         showNotification(`AETHER personalised as ${persona.name} 🧬`, 'success');
+        // Ship tour after persona wizard (avoids poll timeout if user was slow)
+        setTimeout(function () {
+            try {
+                if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.openOnboarding) {
+                    AETHER_Ship.openOnboarding(false);
+                }
+            } catch (_) {}
+        }, 700);
         // Beast Mode onboarding: if no API key yet, open SETUP immediately
         const needsSetup = !(apiConfig && (apiConfig.apiKey || (apiConfig.provider === 'local' && apiConfig.endpoint)));
         if (needsSetup) {
             setTimeout(() => {
                 document.getElementById('btn-setup')?.click();
                 showNotification('Connect a local model or paste an API key — then you are live.', 'info', 5000);
-            }, 600);
+            }, 900);
         }
     };
 
@@ -21158,7 +21192,7 @@ Format the final summary as a single, clean text block divided into the five lab
     const fbConfig = await getFirebaseConfig();
     // Set fallback immediately so "Authenticate" button never silently does nothing
     window._aetherSignInGoogle = async () => {
-        showNotification('Cloud sync unavailable. Serve via HTTPS with Firebase configured, or set aether_firebase_config in localStorage.', 'warning', 6000);
+        showNotification('Cloud sync unavailable. Serve via HTTPS with Firebase configured, or set aether_firebase_config in localStorage.', 'warn', 6000);
     };
     if (fbConfig) {
         initFirebaseAuth(fbConfig).catch(e => reportFeatureError('Cloud Auth Init', e));
