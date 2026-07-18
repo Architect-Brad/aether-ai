@@ -65,15 +65,26 @@
   }
 
   function showIfNeeded(delayMs) {
-    delayMs = typeof delayMs === 'number' ? delayMs : 1800;
+    // v5.38: optional CDNs are lazy-loaded. Missing-at-boot is normal — do not
+    // scare users with a "degraded mode" banner for libs that simply haven't
+    // been requested yet. Only surface *critical* failures.
+    delayMs = typeof delayMs === 'number' ? delayMs : 4000;
     setTimeout(function () {
       try {
         if (sessionStorage.getItem('aether_cap_banner_dismissed') === '1') return;
       } catch (e) {}
       var report = scan();
       g.AETHER_CAPABILITIES = report;
-      if (report.allOk) return;
-      var banner = renderBanner(report);
+      var criticalMissing = (report.missing || []).filter(function (m) {
+        return m.critical;
+      });
+      if (!criticalMissing.length) return;
+      var banner = renderBanner({
+        results: report.results,
+        missing: criticalMissing,
+        ready: report.ready,
+        allOk: false,
+      });
       if (!banner) return;
       var host = document.getElementById('main-app') || document.body;
       host.insertBefore(banner, host.firstChild);

@@ -83,129 +83,45 @@
     };
     </script>
 <!-- ═══════════════════════════════════════════════════════════
-  SECTION 5: CDN DEPENDENCIES
-  15 external libraries loaded from CDNs. Each has an onerror
-  handler so the app doesn't crash if one fails.
-  If all of these load, you have a better internet connection
-  than most of our users. Enjoy the full experience.
-  If some fail, AETHER degrades gracefully.
-  Order matters: localforage → transformers → math → mermaid → etc.
-  Don't reorder these unless you enjoy debugging load order.
+  SECTION 5: LIGHT BOOT — minimal CDN at parse time
+  Heavy libs (onnx, OCR, prettier×6, mermaid, chart, pdf, puter,
+  transformers, CodeMirror) load on demand via core/aether-lazy-cdn.js.
+  This keeps first paint fast and RAM low on phones.
   ═══════════════════════════════════════════════════════════ -->
+    <!-- localforage only — async storage; fails → inline polyfill above -->
     <script src="https://cdn.jsdelivr.net/npm/localforage@1.10.0/dist/localforage.min.js"
+            defer
             onerror="window.localforage = window._localforagePolyfill; console.warn('[AETHER] localforage CDN failed — using localStorage fallback');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2/dist/transformers.min.js" onerror="console.warn('[AETHER] transformers.js not loaded — WhisperJS unavailable')"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.11.0/math.min.js" onerror="window.math=null;"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js" onerror="window.mermaid={init:()=>{},run:()=>Promise.resolve()};console.warn('[AETHER] Mermaid not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/ort.min.js" onerror="window.ort=null;"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@gutenye/ocr-browser@1.4.8/dist/index.min.js" onerror="window.OCR=null;"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js" onerror="window.Tesseract=null;"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onerror="window.Chart=null;"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.9.0/mammoth.browser.min.js" onerror="window.mammoth=null;"></script>
-
-    <!-- ═══ HIGHLIGHT.JS — Static code block syntax highlighting ══════
-         highlight.js is purpose-built for read-only display, exactly what
-         we need for chat message code blocks. Single UMD bundle, 190+
-         languages, works synchronously. Previous approach used CodeMirror
-         (an editor widget) to extract highlighting — wrong tool for this job.
-         highlight.js replaces the hand-rolled applySH() regex highlighter.
-         Falls back to applySH() on CDN failure. Nothing explodes.
-    ════════════════════════════════════════════════════════════════ -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/atom-one-dark.min.css"
-          onerror="console.warn('[AETHER] highlight.js theme not loaded')">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"
-            onerror="window.hljs=null; console.warn('[AETHER] highlight.js not loaded — using built-in highlighter');"></script>
-
-    <!-- ═══ PRETTIER — In-block code formatter ══════════════════════
-         Prettier 3.x UMD. Standalone + all parser plugins.
-         IMPORTANT: In Prettier 3.x UMD, each plugin file registers itself
-         directly on window.prettierPlugins.X — NOT as window.prettierPluginX.
-         The old collector was looking for the wrong global names. Fixed below.
-         Falls back gracefully if CDN blocked — Format button simply hides.
-    ════════════════════════════════════════════════════════════════ -->
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/standalone.js"
-            onerror="window.prettier=null; console.warn('[AETHER] Prettier not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/babel.js"
-            onerror="console.warn('[AETHER] Prettier babel plugin not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/estree.js"
-            onerror="console.warn('[AETHER] Prettier estree plugin not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/typescript.js"
-            onerror="console.warn('[AETHER] Prettier typescript plugin not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/postcss.js"
-            onerror="console.warn('[AETHER] Prettier postcss plugin not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/html.js"
-            onerror="console.warn('[AETHER] Prettier html plugin not loaded');"></script>
-    <script src="https://cdn.jsdelivr.net/npm/prettier@3.5.3/plugins/markdown.js"
-            onerror="console.warn('[AETHER] Prettier markdown plugin not loaded');"></script>
-    <script src="https://js.puter.com/v2/"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js" onerror="window.pdfjsLib=null;"></script>
     <script>
         window.PISTON_API = 'https://emkc.org/api/v2/piston';
-        window.addEventListener('load', () => {
-            if (typeof ort !== 'undefined') {
-                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';
-                ort.env.wasm.numThreads = 1;
-            }
-
-            // ── highlight.js configuration ────────────────────────────────
-            // Configure hljs for our dark cyberpunk theme. Disable auto-detect
-            // (we always know the language from the code fence) and register
-            // common languages we want available. hljs is already loaded as UMD.
-            if (window.hljs) {
-                hljs.configure({
-                    ignoreUnescapedHTML: true,
-                    // Don't auto-highlight — we call hljs.highlight() explicitly
-                    // with the language, so no scanning needed on page load.
-                });
-                console.info('[AETHER] highlight.js ready. Version:', hljs.versionString || '11.x');
-            }
-
-            // ── Prettier 3.x plugin resolution ───────────────────────────
-            // In Prettier 3.x UMD the plugins register themselves automatically
-            // on window.prettierPlugins.X when their scripts execute. By the time
-            // the load event fires all scripts have run, so this read is safe.
-            // We expose a helper that getPrettierParser() calls at format-time
-            // (not at page-load) so late-loading plugins are always found.
-            window.getPrettierPlugin = function(name) {
-                // Prettier 3.x UMD: window.prettierPlugins.babel etc
-                if (window.prettierPlugins && window.prettierPlugins[name]) {
-                    return window.prettierPlugins[name];
-                }
-                // Fallback: some builds expose prettierPluginBabel etc
-                const capitalized = name.charAt(0).toUpperCase() + name.slice(1);
-                return window['prettierPlugin' + capitalized] || null;
-            };
-            if (window.prettier) {
-                const available = ['babel','estree','typescript','postcss','html','markdown']
-                    .filter(n => window.getPrettierPlugin(n));
-                console.info('[AETHER] Prettier 3 ready. Plugins:', available.join(', ') || 'none (check CDN)');
-            }
-
-            // ── CodeMirror 6 — dynamic ESM import for AETHER Code editor ──
-            // CM6 packages are ESM-only — no UMD builds. We load them via
-            // dynamic import() from esm.sh (a CDN that serves proper ESM for
-            // any npm package). This runs after page load so it never blocks.
-            // The CM editor is only mounted when the user opens AETHER Code,
-            // so the lazy load is both correct and efficient.
-            //
-            // Exposed on window.CM6 for the mountCM6Editor() function in script.js.
-            window.CM6 = null;
-            import('https://esm.sh/codemirror@6?bundle')
-                .then(async cm => {
-                    const [langPack, oneDark] = await Promise.all([
+        window.CM6 = null;
+        window.getPrettierPlugin = window.getPrettierPlugin || function (name) {
+            if (window.prettierPlugins && window.prettierPlugins[name]) return window.prettierPlugins[name];
+            var capitalized = name.charAt(0).toUpperCase() + name.slice(1);
+            return window['prettierPlugin' + capitalized] || null;
+        };
+        // CodeMirror 6 loads only when CODE mode is first enabled (see ensureCM6)
+        window.ensureCM6 = function () {
+            if (window.CM6) return Promise.resolve(window.CM6);
+            if (window._cm6Promise) return window._cm6Promise;
+            window._cm6Promise = import('https://esm.sh/codemirror@6?bundle')
+                .then(async function (cm) {
+                    var packs = await Promise.all([
                         import('https://esm.sh/@codemirror/language-data@6?bundle'),
                         import('https://esm.sh/@codemirror/theme-one-dark@6?bundle'),
                     ]);
-                    window.CM6 = { cm, langPack, oneDark };
-                    // Dispatch event so script.js can react if the editor was
-                    // already requested before CM6 finished loading
+                    window.CM6 = { cm: cm, langPack: packs[0], oneDark: packs[1] };
                     document.dispatchEvent(new Event('cm6-ready'));
-                    console.info('[AETHER] CodeMirror 6 loaded via ESM — AETHER Code editor ready');
+                    console.info('[AETHER] CodeMirror 6 ready (lazy)');
+                    return window.CM6;
                 })
-                .catch(e => {
-                    console.warn('[AETHER] CodeMirror 6 ESM load failed:', e.message, '— editor will use textarea fallback');
+                .catch(function (e) {
+                    console.warn('[AETHER] CodeMirror 6 load failed:', e && e.message);
+                    window._cm6Promise = null;
+                    return null;
                 });
-        });
+            return window._cm6Promise;
+        };
     </script>
     <style>body{margin:0;background:#050505;font-family:'Courier New',monospace;overflow-x:hidden}</style>
 </head>
@@ -404,7 +320,7 @@
                 <span class="status-divider">│</span>
                 <span class="status-model-pill" id="status-model-pill"><svg class="ic-xs" style="opacity:.5"><use href="#ic-cpu"/></svg><span id="status-model-name">local</span></span>
                 <span class="status-divider">│</span>
-                <span class="status-state" id="status-version-label">v5.37 FLOAT</span>
+                <span class="status-state" id="status-version-label">v5.38 LIGHT</span>
             </div>
             <div class="status-right">
             <button id="btn-cal-connect" class="cal-indicator" onclick="window.authorizeCalendar?window.authorizeCalendar():null" title="Connect Google Calendar">
@@ -1452,6 +1368,7 @@
 <!-- Core modules (zero-build ES-free globals — load before / after script.js) -->
 <script src="core/version.js"></script>
 <script src="core/safe-math.js"></script>
+<script src="core/aether-lazy-cdn.js"></script>
 <script src="core/capabilities.js"></script>
 <script src="core/beast-mode.js"></script>
 <script src="core/skill-utils.js"></script>

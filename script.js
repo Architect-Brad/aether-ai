@@ -3250,6 +3250,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     function toggleCodingMode() {
         state.codingMode = !state.codingMode;
         if (state.codingMode && typeof window._aetherExpandModes === 'function') window._aetherExpandModes();
+        // Lazy-load CodeMirror only when CODE is first turned on
+        if (state.codingMode && typeof window.ensureCM6 === 'function') {
+            window.ensureCM6().catch(function () {});
+        }
         const btn = document.getElementById('btn-coding-mode');
         if (btn) btn.classList.toggle('active', state.codingMode);
         document.body.classList.toggle('coding-mode', state.codingMode);
@@ -3493,13 +3497,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         // If Prettier throws (common with AI-generated partial snippets),
         // shows a brief error tooltip and leaves the code untouched.
         const prettierParser = getPrettierParser(detectedLang);
-        if (prettierParser && window.prettier) {
+        // Always offer Format when a parser mapping exists — prettier loads on first click
+        if (prettierParser) {
             const fmtBtn = makeCBBtn('cb-btn-format', 'Format with Prettier',
                 '<path d="M3 6h18M3 12h12M3 18h8" stroke-linecap="round"/>', '⬡ Format');
             hdrRight.insertBefore(fmtBtn, copyBtn.nextSibling);
             fmtBtn.onclick = async () => {
                 fmtBtn.textContent = '…';
                 fmtBtn.disabled = true;
+                try {
+                    if (window.AETHER_Lazy) await AETHER_Lazy.ensure('prettierAll');
+                } catch (_) {}
                 const { formatted, error } = await formatWithPrettier(currentCode, detectedLang);
                 if (error) {
                     fmtBtn.textContent = '⚠ ' + error.slice(0, 40);
@@ -8194,7 +8202,11 @@ window.bgAddTask = () => showAetherDialog({
             };
             wbContainer.appendChild(dlBtn);
 
-            try { await mermaid.run({ nodes: [mEl] }); } catch(e) {
+            try {
+                if (window.AETHER_Lazy) await AETHER_Lazy.ensure('mermaid');
+                if (typeof mermaid === 'undefined') throw new Error('Mermaid not loaded');
+                await mermaid.run({ nodes: [mEl] });
+            } catch(e) {
                 mEl.textContent = 'Error: ' + e.message + '\n\n' + clean;
             }
             callHistory.push({ role: 'assistant', content: '[Whiteboard: ' + (clean.split('\n')[0] || 'diagram') + ']' });
@@ -10366,6 +10378,10 @@ Deliver maximum value per token. Logic governs all output.
     // ─── OCR ─────────────────────────────────────────────────
     async function initPaddleOcr() {
         if(state.paddleOcr) return state.paddleOcr;
+        // Lazy CDN: onnx + ocr-browser only when user actually runs OCR
+        if (window.AETHER_Lazy) {
+            try { await AETHER_Lazy.ensure('ocrAll'); } catch (_) {}
+        }
         if(typeof OcrBrowser==='undefined'){ocrEngine='tesseract';return null;}
         if(typeof ort!=='undefined'){ort.env.wasm.wasmPaths='https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.0/dist/';ort.env.wasm.numThreads=1;}
         try {
@@ -10378,6 +10394,10 @@ Deliver maximum value per token. Logic governs all output.
     async function processImageWithTesseract(file) {
         if(ocrStatus) ocrStatus.classList.remove('hidden');
         try {
+            if (window.AETHER_Lazy && typeof Tesseract === 'undefined') {
+                try { await AETHER_Lazy.ensure('tesseract'); } catch (_) {}
+            }
+            if (typeof Tesseract === 'undefined') return { text: '', confidence: 0, success: false };
             const r=await Tesseract.recognize(file,'eng',{logger:m=>{ if(m.status==='recognizing text'){if(ocrProgressText)ocrProgressText.textContent=`Recognizing ${Math.round(m.progress*100)}%`;if(ocrProgressFill)ocrProgressFill.style.width=Math.round(m.progress*100)+'%';}}});
             if(ocrConfidence) ocrConfidence.textContent=Math.round(r.data.confidence)+'%';
             setTimeout(()=>{if(ocrStatus)ocrStatus.classList.add('hidden');},2000);
@@ -10568,6 +10588,8 @@ Deliver maximum value per token. Logic governs all output.
         let content='';
         try {
             if(ext==='docx'){
+                if (window.AETHER_Lazy) { try { await AETHER_Lazy.ensure('mammoth'); } catch (_) {} }
+                if (typeof mammoth === 'undefined') { showNotification('DOCX reader unavailable','error'); return; }
                 const ab=await new Promise((res,rej)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.onerror=rej;r.readAsArrayBuffer(file);});
                 content=(await mammoth.extractRawText({arrayBuffer:ab})).value;
             } else if(['txt','md','json','js','py','csv','html','css','xml','yaml','yml','ini','cfg','sh','go','rs','java','c','cpp','rb','lua','sql'].includes(ext)){
@@ -11067,6 +11089,9 @@ Deliver maximum value per token. Logic governs all output.
     canvasFileInput.addEventListener('change', async e => {
         const file = e.target.files[0]; if(!file) return;
         if(file.type==='application/pdf'){
+            if (window.AETHER_Lazy && typeof pdfjsLib === 'undefined') {
+                try { await AETHER_Lazy.ensure('pdfjs'); } catch (_) {}
+            }
             if(typeof pdfjsLib==='undefined'){showNotification('PDF.js not loaded','error');return;}
             pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
             const pdf=await pdfjsLib.getDocument(URL.createObjectURL(file)).promise;
@@ -11815,7 +11840,10 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     }
 
     async function formatWithPrettier(code, lang) {
-        // Guard: prettier itself must be loaded
+        // Lazy-load Prettier + plugins on first format
+        if (!window.prettier && window.AETHER_Lazy) {
+            try { await AETHER_Lazy.ensure('prettierAll'); } catch (_) {}
+        }
         if (!window.prettier) return { formatted: code, error: 'Prettier not loaded' };
         const info = getPrettierParser(lang);
         if (!info) return { formatted: code, error: 'No Prettier parser for: ' + lang };
@@ -11846,7 +11874,17 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     // string with <span class="hljs-*"> tokens. We set innerHTML directly.
     // hljs uses atom-one-dark CSS loaded in index.html.
     function highlightWithHljs(codeEl, lang) {
-        if (!window.hljs) { applySH(codeEl, lang); return; }
+        // Prefer built-in highlighter until hljs arrives; upgrade async
+        if (!window.hljs) {
+            applySH(codeEl, lang);
+            if (window.AETHER_Lazy && !window._hljsEnsureStarted) {
+                window._hljsEnsureStarted = true;
+                AETHER_Lazy.ensure('hljs').then(function (ok) {
+                    if (ok && codeEl && codeEl.isConnected) highlightWithHljs(codeEl, lang);
+                }).catch(function () {});
+            }
+            return;
+        }
         const canonical = normLang(lang);
         try {
             // Check if hljs knows this language — getLanguage returns null if not
@@ -12073,8 +12111,28 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         lines.forEach(l=>{ const t=l.trim(); if(t.startsWith('title')){title=t.slice(5).trim();return;} const p=t.split('|').map(s=>s.trim()); if(p.length===2&&!isNaN(parseFloat(p[1]))) data.push({label:p[0],value:parseFloat(p[1])}); });
         if(title){const te=document.createElement('div');te.className='graph-title';te.textContent=title;wrapper.appendChild(te);}
         if(!data.length){wrapper.innerHTML+='<div class="graph-fallback">No data</div>';return wrapper;}
-        if(type==='pie'){const md=document.createElement('div');md.className='mermaid';let mc='pie showData\n';if(title)mc+=`    title ${title}\n`;data.forEach(d=>mc+=`    "${d.label}" : ${d.value}\n`);md.textContent=mc;wrapper.appendChild(md);setTimeout(()=>mermaid.init(undefined,md),100);return wrapper;}
-        if(typeof Chart!=='undefined'){const cv=document.createElement('canvas');wrapper.appendChild(cv);setTimeout(()=>new Chart(cv,{type:type==='bar'?'bar':'line',data:{labels:data.map(d=>d.label),datasets:[{label:'Values',data:data.map(d=>d.value),backgroundColor:'rgba(0,243,255,0.2)',borderColor:'#00f3ff',borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}}),50);}
+        if(type==='pie'){
+            const md=document.createElement('div');md.className='mermaid';
+            let mc='pie showData\n';if(title)mc+=`    title ${title}\n`;data.forEach(d=>mc+=`    "${d.label}" : ${d.value}\n`);
+            md.textContent=mc;wrapper.appendChild(md);
+            (async function(){
+                try {
+                    if (window.AETHER_Lazy) await AETHER_Lazy.ensure('mermaid');
+                    if (typeof mermaid !== 'undefined') mermaid.init(undefined, md);
+                } catch(_) {}
+            })();
+            return wrapper;
+        }
+        {
+            const cv=document.createElement('canvas');wrapper.appendChild(cv);
+            (async function(){
+                try {
+                    if (window.AETHER_Lazy) await AETHER_Lazy.ensure('chart');
+                    if (typeof Chart === 'undefined') return;
+                    new Chart(cv,{type:type==='bar'?'bar':'line',data:{labels:data.map(d=>d.label),datasets:[{label:'Values',data:data.map(d=>d.value),backgroundColor:'rgba(0,243,255,0.2)',borderColor:'#00f3ff',borderWidth:2}]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:280},plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+                } catch(_) {}
+            })();
+        }
         return wrapper;
     }
 
@@ -12347,9 +12405,13 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         // ── Chart.js ─────────────────────────────────────────────
         async function ensureChartJS() {
             if (window.Chart) return;
+            if (window.AETHER_Lazy) {
+                const ok = await AETHER_Lazy.ensure('chart');
+                if (ok && window.Chart) return;
+            }
             await new Promise((resolve,reject)=>{
                 const s=document.createElement('script');
-                s.src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js';
+                s.src='https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js';
                 s.onload=resolve; s.onerror=()=>reject(new Error('Chart.js load failed'));
                 document.head.appendChild(s);
             });
@@ -12407,7 +12469,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 data: { labels: spec.labels || [], datasets },
                 options: {
                     responsive: true,
-                    animation: { duration: 500 },
+                    animation: { duration: 280 },
                     indexAxis: isHBar ? 'y' : 'x',
                     plugins: {
                         legend: { display: !!(isDonut||isRadar||datasets.length>1), labels: { color:'#8aaabb', font:{ size:11 }, boxWidth:12 } },
@@ -13787,13 +13849,18 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     let _apParticleTimer = null;
     function apStartParticles() {
         if (_apParticleTimer) return;
+        // Cap particle spawn rate + skip when tab hidden / reduced motion
+        try {
+            if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        } catch (_) {}
         _apParticleTimer = setInterval(() => {
-            if (!apParticles) return;
+            if (!apParticles || document.hidden) return;
+            // Cap DOM particles to avoid unbounded node growth
+            if (apParticles.childElementCount > 18) return;
             const dot = document.createElement('div');
             dot.className = 'ap-particle';
             const size = 2 + Math.random() * 3;
             const col = apRingColor(apCurrentStatus === 'streaming' ? 'streaming' : 'thinking');
-            // parse hex-ish to rgba roughly, or use color directly
             dot.style.cssText = 'width:' + size + 'px;height:' + size + 'px;'
                 + 'left:' + (10 + Math.random() * 80) + '%;'
                 + 'bottom:0;'
@@ -13802,16 +13869,17 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 + 'background:' + col + ';'
                 + 'opacity:0.55;';
             apParticles.appendChild(dot);
-            setTimeout(() => dot.remove(), 3500);
-        }, 180);
+            setTimeout(() => { try { dot.remove(); } catch (_) {} }, 3200);
+        }, 320); // was 180ms — half the DOM churn
     }
     function apStopParticles() {
         clearInterval(_apParticleTimer); _apParticleTimer = null;
         if (apParticles) apParticles.innerHTML = '';
     }
 
-    // Idle message rotation (theme-aware copy)
+    // Idle message rotation (theme-aware copy) — pause when tab hidden
     setInterval(() => {
+        if (document.hidden) return;
         if (apCurrentStatus === 'idle' && apStatusEl) {
             const msgs = apIdleMessages();
             apMsgIdx = (apMsgIdx + 1) % msgs.length;
@@ -13822,7 +13890,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                     : new Date().toLocaleTimeString('en-GB', { hour12: false });
             }
         }
-    }, 4000);
+    }, 8000);
 
     function apUpdateFromState() {
         const convId = state.currentConversationId;
@@ -13948,24 +14016,55 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             }
         }
 
-        (function animate() {
-            // Respect CFG → Appearance → Wave toggle (still rAF so resume is instant)
-            if (state.waveEnabled === false) {
+        // Perf: idle wave ~5fps (setTimeout); streaming uses rAF; hidden tab = sleep
+        var _waveRaf = 0;
+        var _waveIdleTimer = 0;
+        var _prefersReducedMotion = false;
+        try {
+            _prefersReducedMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        } catch (_) {}
+
+        function scheduleWaveFrame(isLive) {
+            if (document.hidden) {
+                document.addEventListener('visibilitychange', function onVis() {
+                    document.removeEventListener('visibilitychange', onVis);
+                    scheduleWaveFrame(false);
+                }, { once: true });
+                return;
+            }
+            if (isLive) {
+                _waveRaf = requestAnimationFrame(animate);
+            } else {
+                // Idle: ~5 fps is enough for a flat/breathing line — huge GPU win
+                _waveIdleTimer = setTimeout(function () {
+                    _waveRaf = requestAnimationFrame(animate);
+                }, _prefersReducedMotion ? 500 : 200);
+            }
+        }
+
+        function animate() {
+            if (_waveIdleTimer) { clearTimeout(_waveIdleTimer); _waveIdleTimer = 0; }
+
+            // Wave disabled or reduced motion → static clear, poll slowly
+            if (state.waveEnabled === false || _prefersReducedMotion) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                requestAnimationFrame(animate);
+                if (state.waveEnabled !== false && _prefersReducedMotion) {
+                    // single flat line
+                    const H = canvas.height / 2;
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(0,243,255,0.35)';
+                    ctx.lineWidth = 1;
+                    ctx.moveTo(0, H); ctx.lineTo(canvas.width, H); ctx.stroke();
+                }
+                scheduleWaveFrame(false);
                 return;
             }
 
             const convId = state.currentConversationId;
             const isProcessing = !!(convId && state.processingConversations[convId]);
-
-            // Determine target TPS
             const targetTPS = isProcessing ? _waveTPS : 0;
-
-            // Calm idle: flat line when not processing (CFG → Appearance)
             const calmIdle = state.waveCalmIdle !== false;
 
-            // Exponential smoothing — wave trails actual TPS gracefully
             smoothTPS   = smoothTPS   * (1 - SMOOTH) + targetTPS  * SMOOTH;
             const idleAmp = calmIdle ? 0.4 : 4;
             const idleSpeed = calmIdle ? 0.008 : 0.025;
@@ -13975,20 +14074,20 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const H = canvas.height / 2;
             const W = canvas.width;
+            // Coarser step when idle — fewer path points
+            const step = isProcessing ? 2 : 4;
             const color1 = tpsToColor(smoothTPS, 1);
             const color2 = tpsToColor(smoothTPS, 0.25);
 
-            // Primary wave — flat when calm-idle, organic when live
             ctx.beginPath();
             ctx.strokeStyle = color1;
             ctx.lineWidth = isProcessing ? 1.8 : (calmIdle ? 1 : 1.2);
             if (!isProcessing && calmIdle && smoothAmp < 1.2) {
-                // True flat baseline with tiny breath
                 const breath = Math.sin(phase * 0.5) * 0.6;
                 ctx.moveTo(0, H + breath);
                 ctx.lineTo(W, H + breath);
             } else {
-                for (let x = 0; x < W; x += 2) {
+                for (let x = 0; x < W; x += step) {
                     const noise = smoothTPS > 5 ? Math.sin(x * 0.08 + phase * 2.3) * (smoothAmp * 0.15) : 0;
                     const y = H
                         + Math.sin(x * 0.022 + phase) * smoothAmp
@@ -13999,12 +14098,11 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             }
             ctx.stroke();
 
-            // Secondary wave — skip when calm idle (less visual noise)
             if (isProcessing || !calmIdle) {
                 ctx.beginPath();
                 ctx.strokeStyle = color2;
                 ctx.lineWidth = 1;
-                for (let x = 0; x < W; x += 3) {
+                for (let x = 0; x < W; x += step + 1) {
                     const y = H
                         + Math.sin(x * 0.018 + phase + 0.9) * (smoothAmp * 0.55)
                         + Math.sin(x * 0.032 + phase * 0.7) * (smoothAmp * 0.2);
@@ -14013,15 +14111,14 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 ctx.stroke();
             }
 
-            // Glow pulse on high TPS — subtle fill under primary wave
-            if (smoothTPS > 30) {
+            if (isProcessing && smoothTPS > 30) {
                 const glowAlpha = Math.min((smoothTPS - 30) / 200, 0.06);
                 const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
                 grad.addColorStop(0, tpsToColor(smoothTPS, glowAlpha));
                 grad.addColorStop(1, 'rgba(0,0,0,0)');
                 ctx.beginPath();
                 ctx.moveTo(0, H);
-                for (let x = 0; x < W; x += 3) {
+                for (let x = 0; x < W; x += 4) {
                     const y = H + Math.sin(x * 0.022 + phase) * smoothAmp;
                     ctx.lineTo(x, y);
                 }
@@ -14031,7 +14128,6 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
 
             phase += smoothSpeed;
 
-            // ── Scan line — sweeps vertically during inference ──
             if (isProcessing) {
                 const scanPos = ((Date.now() / 1200) % 1) * canvas.height;
                 const scanGrad = ctx.createLinearGradient(0, scanPos - 6, 0, scanPos + 6);
@@ -14042,19 +14138,9 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 ctx.fillRect(0, scanPos - 6, canvas.width, 12);
             }
 
-            // ── Pause RAF when tab is hidden — saves GPU on background tabs ──
-            // The wave is purely decorative; pausing it when hidden costs nothing
-            // visible to the user and eliminates ~60 canvas composites/sec.
-            if (!document.hidden) {
-                requestAnimationFrame(animate);
-            } else {
-                // Resume immediately when tab becomes visible again
-                document.addEventListener('visibilitychange', function onVis() {
-                    document.removeEventListener('visibilitychange', onVis);
-                    requestAnimationFrame(animate);
-                }, { once: true });
-            }
-        })();
+            scheduleWaveFrame(isProcessing);
+        }
+        scheduleWaveFrame(false);
     }
 
     // ─── PERSISTENCE ─────────────────────────────────────────
@@ -14093,29 +14179,35 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             }
         } catch {}
     }
-    function saveState() {
-        try {
-            localStorage.setItem('aether_state', JSON.stringify({
-                temperature:state.temperature, topK:state.topK, coTEnabled:state.coTEnabled,
-                showThoughts:state.showThoughts, ragEnabled:state.ragEnabled,
-                streamingEnabled:state.streamingEnabled, blurInEnabled:state.blurInEnabled,
-                vectorRagEnabled:state.vectorRagEnabled,
-                showMetrics:state.showMetrics, deepResearchSettings:state.deepResearchSettings,
-                codingMode:state.codingMode,
-                groqReasoningEffort:state.groqReasoningEffort,
-                groqWebSearch:state.groqWebSearch,
-                groqCodeExecution:state.groqCodeExecution,
-                clarificationEnabled:state.clarificationEnabled,
-                // SOUL & Reflection
-                reflectionEnabled:state.reflectionEnabled,
-                reflectionIntervalMin:state.reflectionIntervalMin,
-                proactiveEnabled:state.proactiveEnabled,
-                proactiveMaxPerDay:state.proactiveMaxPerDay,
-                reflectionTokenCost:state.reflectionTokenCost,
-                // Agent
-                agentMode:state.agentMode,
-            }));
-        } catch {}
+    // Debounced persistence — frequent toggles used to hit localStorage every click
+    var _saveStateTimer = null;
+    function saveState(immediate) {
+        if (_saveStateTimer) clearTimeout(_saveStateTimer);
+        var write = function () {
+            _saveStateTimer = null;
+            try {
+                localStorage.setItem('aether_state', JSON.stringify({
+                    temperature:state.temperature, topK:state.topK, coTEnabled:state.coTEnabled,
+                    showThoughts:state.showThoughts, ragEnabled:state.ragEnabled,
+                    streamingEnabled:state.streamingEnabled, blurInEnabled:state.blurInEnabled,
+                    vectorRagEnabled:state.vectorRagEnabled,
+                    showMetrics:state.showMetrics, deepResearchSettings:state.deepResearchSettings,
+                    codingMode:state.codingMode,
+                    groqReasoningEffort:state.groqReasoningEffort,
+                    groqWebSearch:state.groqWebSearch,
+                    groqCodeExecution:state.groqCodeExecution,
+                    clarificationEnabled:state.clarificationEnabled,
+                    reflectionEnabled:state.reflectionEnabled,
+                    reflectionIntervalMin:state.reflectionIntervalMin,
+                    proactiveEnabled:state.proactiveEnabled,
+                    proactiveMaxPerDay:state.proactiveMaxPerDay,
+                    reflectionTokenCost:state.reflectionTokenCost,
+                    agentMode:state.agentMode,
+                }));
+            } catch {}
+        };
+        if (immediate) write();
+        else _saveStateTimer = setTimeout(write, 400);
     }
     function updateUIFromState() {
         if(temperatureSlider) temperatureSlider.value=state.temperature;
@@ -17923,7 +18015,19 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.37', date: 'July 2026', tag: 'latest',
+            version: 'v5.38', date: 'July 2026', tag: 'latest',
+            headline: 'Light Boot — less RAM, snappier first paint',
+            notes: [
+                { type:'perf', text:'LAZY CDN — onnx/OCR/prettier/mermaid/chart/pdf/puter no longer load at boot' },
+                { type:'perf', text:'WAVE — idle ~5fps; full rAF only while streaming; sleeps when tab hidden' },
+                { type:'perf', text:'CODEMIRROR — loads only when CODE mode is first enabled' },
+                { type:'perf', text:'PARTICLES — slower spawn, capped DOM count; reduced-motion respected' },
+                { type:'perf', text:'STATE — saveState debounced 400ms to cut localStorage thrash' },
+                { type:'fix',  text:'Capability banner no longer cries “degraded” for not-yet-loaded optionals' },
+            ],
+        },
+        {
+            version: 'v5.37', date: 'July 2026', tag: '',
             headline: 'Composer Float — snap chat input raised ↔ docked',
             notes: [
                 { type:'new',  text:'FLOATING INPUT — raise the composer into the Kernel height band (thumb-friendly)' },
@@ -21516,10 +21620,17 @@ Format the final summary as a single, clean text block divided into the five lab
         } catch (e) { console.warn('[AETHER] kernel instrument', e); }
     }, 500);
 
+    // Prefetch light libs after idle (hljs only — mermaid/chart on demand)
+    try {
+        if (typeof AETHER_Lazy !== 'undefined' && AETHER_Lazy.scheduleIdlePrefetch) {
+            AETHER_Lazy.scheduleIdlePrefetch(['hljs'], 8000);
+        }
+    } catch (_) {}
+
     // ── Console signature ─────────────────────────────────────
     const _ver = typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.27';
     console.log('%c ⬡ AETHER ' + _ver + ' AETHER CODE PRO ONLINE ', 'background:#9b59b6;color:#fff;font-weight:bold;font-size:12px;padding:4px 8px;border-radius:3px;font-family:monospace');
-    console.log('%c Ship · Moat · Markdown · Skills: ' + Object.keys(AETHER_SKILLS).length, 'color:#00f3ff;font-family:monospace');
+    console.log('%c Ship · Moat · Markdown · Skills: ' + Object.keys(AETHER_SKILLS).length + ' · lazy CDN', 'color:#00f3ff;font-family:monospace');
     try {
         if (typeof AETHER_Moat !== 'undefined') {
             AETHER_Moat.installHooks();
