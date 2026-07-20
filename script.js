@@ -16952,6 +16952,15 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
             addSystemMessage(AETHER_Ship.shipCheckMarkdown(r));
             showNotification(r.ok ? 'Shipcheck PASS' : 'Shipcheck FAIL', r.ok ? 'success' : 'warn');
         } },
+        { id:'heropath',  label:'/heropath', desc:'90-second hero path checklist (SETUP→CODE→Ghost→RAG→Viz)', group:'System', action: () => {
+            if (typeof AETHER_Ship === 'undefined' || !AETHER_Ship.runHeroPath) {
+                addSystemMessage('Ship layer offline');
+                return;
+            }
+            const r = AETHER_Ship.runHeroPath();
+            addSystemMessage(AETHER_Ship.heroPathMarkdown(r));
+            showNotification(r.hardOk ? 'Hero path READY' : 'Hero path has gaps', r.hardOk ? 'success' : 'warn');
+        } },
         { id:'mdtest',    label:'/mdtest', desc:'Markdown engine golden fixtures', group:'System', action: () => {
             if (typeof AETHER_Markdown === 'undefined' || !AETHER_Markdown.runGoldenFixtures) {
                 addSystemMessage('Markdown engine offline');
@@ -17619,12 +17628,21 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
 
     const AETHER_CHANGELOG = [
         {
-            version: 'v5.39', date: 'July 2026', tag: 'latest',
+            version: 'v5.40', date: 'July 2026', tag: 'latest',
+            headline: 'Hero Path — 90-second demo checklist',
+            notes: [
+                { type:'new',  text:'/heropath — SETUP→CODE→Ghost→RAG→Viz checklist with hard + live probes' },
+                { type:'new',  text:'Shipcheck includes hero_path hard modules; tests/hero-path.html' },
+                { type:'new',  text:'Ship tour finish posts hero checklist; README 90s demo script' },
+            ],
+        },
+        {
+            version: 'v5.39', date: 'July 2026', tag: '',
             headline: 'AetherViz v2 — multi-spec artifact runtime',
             notes: [
                 { type:'new',  text:'core/aether-visualizer.js v2 — modular engine, schema aether-viz-v1' },
                 { type:'fix',  text:'normalizeSpec — flow · struct · svg · table no longer dropped' },
-                { type:'new',  text:'MULTI-SPEC — all ```viz / ```aether-viz / mermaid blocks in one reply render' },
+                { type:'new',  text:'MULTI-SPEC — all viz fences in one reply render' },
                 { type:'fix',  text:'Render errors fall through to markdown (no silent swallow)' },
                 { type:'new',  text:'STREAM-STABLE open viz fences; mobile export bar; Folder save under aether-viz/' },
                 { type:'new',  text:'Mermaid SVG sanitized; Ivory chart theme tokens; /viztest goldens + shipcheck gate' },

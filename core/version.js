@@ -7,8 +7,8 @@
  */
 (function (g) {
   'use strict';
-  var VERSION = '5.39';
-  var CODENAME = 'Viz v2';
+  var VERSION = '5.40';
+  var CODENAME = 'Hero Path';
   var BUILD = '2026.07.18';
 
   g.AETHER_VERSION = VERSION;

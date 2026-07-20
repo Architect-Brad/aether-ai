@@ -238,6 +238,7 @@ function main() {
     'core/aether-moat.js',
     'core/ghost-commits.js',
     'core/aether-visualizer.js',
+    'core/aether-rag-v2.js',
     'core/aether-ship.js',
   ];
 
@@ -262,6 +263,13 @@ function main() {
     loadQueue: () => [],
     render: () => {},
   };
+  // RAG v2 may need IDB — ensure indexFolder probe for hero path
+  if (!sandbox.AETHER_RAGv2 || !sandbox.AETHER_RAGv2.indexFolder) {
+    sandbox.AETHER_RAGv2 = Object.assign({}, sandbox.AETHER_RAGv2 || {}, {
+      indexFolder: async () => ({ ok: true, indexed: 0 }),
+      stats: () => ({ chunks: 0, hybrid: true, collections: [] }),
+    });
+  }
   // Ghost module may already export — ensure accept exists
   if (sandbox.AETHER_Ghost && !sandbox.AETHER_Ghost.accept) {
     sandbox.AETHER_Ghost.accept = async () => ({ ok: true });

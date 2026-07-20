@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AETHER 90s Hero Path</title>
+  <style>
+    body { font-family: ui-monospace, monospace; background: #0a0a0f; color: #cde; padding: 24px; max-width: 720px; }
+    h1 { color: #00f3ff; font-size: 1.1rem; }
+    .ok { color: #1d9e75; } .fail { color: #e24b4a; } .live { color: #f0c040; }
+    pre { background: #12121a; padding: 14px; border-radius: 8px; white-space: pre-wrap; line-height: 1.5; }
+    .step { margin: 10px 0; padding: 10px 12px; border: 1px solid #1e2535; border-radius: 8px; }
+    .step b { color: #00f3ff; }
+    a { color: #00f3ff; }
+  </style>
+  <script src="../core/version.js"></script>
+  <script src="../core/aether-markdown.js"></script>
+  <script src="../core/aether-tool-runtime.js"></script>
+  <script src="../core/ghost-commits.js"></script>
+  <script src="../core/aether-moat.js"></script>
+  <script src="../core/aether-visualizer.js"></script>
+  <script src="../core/aether-ship.js"></script>
+</head>
+<body>
+  <h1>⬡ AETHER · 90-second hero path</h1>
+  <p>Cold visitor path: SETUP → CODE folder → Ghost Accept → <code>/rag index</code> → Viz or shipcheck.</p>
+  <div id="steps"></div>
+  <p id="summary">Running probes…</p>
+  <pre id="out"></pre>
+  <p><a href="../index.html">Open app →</a> · then run <code>/heropath</code> in chat for live session probes.</p>
+  <script>
+    // Minimal stubs so soft modules resolve in isolation
+    window.AETHER_SKILLS = window.AETHER_SKILLS || {};
+    window.AETHER_RAGv2 = window.AETHER_RAGv2 || {
+      indexFolder: async function () { return { ok: true, indexed: 0 }; },
+      stats: function () { return { chunks: 0 }; },
+    };
+    window.AETHER_CodePro = window.AETHER_CodePro || { listCheckpoints: function () { return []; } };
+    window.AETHER_ChangeSet = window.AETHER_ChangeSet || { createFromPending: function () { return null; } };
+    window.AETHER_Kernel = window.AETHER_Kernel || { log: function () {}, on: function () {} };
+    window.AETHER_Ghost = window.AETHER_Ghost || {
+      accept: async function () { return { ok: true }; },
+      propose: function (x) { return x; },
+      loadQueue: function () { return []; },
+    };
+    if (window.AETHER_Moat && window.AETHER_Moat.installHooks) {
+      try { window.AETHER_Moat.installHooks(); } catch (e) {}
+    }
+
+    var steps = (window.AETHER_Ship && AETHER_Ship.HERO_STEPS) || [];
+    document.getElementById('steps').innerHTML = steps.map(function (s) {
+      return '<div class="step"><b>' + s.n + '. ' + s.title + '</b><br>' + s.detail + '</div>';
+    }).join('');
+
+    var r = AETHER_Ship.runHeroPath();
+    document.getElementById('summary').innerHTML =
+      '<span class="' + (r.hardOk ? 'ok' : 'fail') + '">' +
+      (r.hardOk ? 'HARD READY' : 'HARD GAPS') +
+      '</span> · hard ' + r.hardPassed + '/' + r.hardTotal +
+      ' · browser/live ' + r.livePassed + '/' + r.liveTotal +
+      ' · product v' + (r.product || AETHER_VERSION || '?');
+
+    document.getElementById('out').textContent = r.results.map(function (x) {
+      return (x.pass ? '✓' : '✗') + ' [' + (x.kind || 'hard') + '] ' + x.name +
+        (x.detail ? ' — ' + x.detail : '');
+    }).join('\n');
+  </script>
+</body>
+</html>

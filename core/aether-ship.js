@@ -462,7 +462,15 @@
       if (g.AETHER_Moat && g.AETHER_Moat.record) {
         g.AETHER_Moat.record('session', { title: 'Onboarding complete', detail: 'ship v' + VERSION });
       }
-      if (g.showNotification) g.showNotification('⬡ You are set — open CODE, DEEP, or /moat', 'success');
+      if (g.showNotification) {
+        g.showNotification('⬡ You are set — try the 90s path: CODE → folder → Ghost → /rag index', 'success');
+      }
+      // Surface hero checklist in chat if available
+      try {
+        if (typeof g.addSystemMessage === 'function') {
+          g.addSystemMessage(heroPathMarkdown(runHeroPath()));
+        }
+      } catch (eH) {}
       modal.remove();
     }
 
@@ -597,6 +605,239 @@
   }
 
   /**
+   * 90-second hero path — structural + live session probes.
+   *
+   * Path: SETUP → CODE link folder → Ghost Accept → /rag index → Viz or /shipcheck
+   * Hard checks = modules/APIs required for the path.
+   * Live checks = session state (folder linked, key present) — advisory only.
+   */
+  function runHeroPath() {
+    var results = [];
+    function ok(name, pass, detail, kind) {
+      results.push({
+        name: name,
+        pass: !!pass,
+        detail: detail || '',
+        kind: kind || 'hard',
+      });
+    }
+
+    // ── Hard: modules required for the path (CI-safe) ────────
+    ok('version', !!(g.AETHER_VERSION || g.AETHER_VERSION_LABEL), g.AETHER_VERSION_LABEL || g.AETHER_VERSION || '', 'hard');
+    ok('ghost_accept', !!(g.AETHER_Ghost && g.AETHER_Ghost.accept && g.AETHER_Ghost.propose), '', 'hard');
+    ok('rag_indexFolder', !!(g.AETHER_RAGv2 && g.AETHER_RAGv2.indexFolder), '', 'hard');
+    ok(
+      'visualizer',
+      !!(g.AetherVisualizer && g.AetherVisualizer.autoDetect && g.AetherVisualizer.version),
+      g.AetherVisualizer ? 'v' + g.AetherVisualizer.version : '',
+      'hard'
+    );
+    ok(
+      'tool_runtime',
+      !!(g.AETHER_ToolRuntime && (g.AETHER_ToolRuntime.collectToolCalls || g.AETHER_ToolRuntime.runGoldenSuite)),
+      '',
+      'hard'
+    );
+    ok('shipcheck_api', typeof runShipCheck === 'function', '', 'hard');
+    ok('markdown', !!g.AETHER_Markdown, '', 'hard');
+
+    // ── Browser: DOM / APIs (advisory in headless CI) ─────────
+    var hasDom = typeof document !== 'undefined' && document.getElementById;
+    if (hasDom) {
+      ok(
+        'setup_button',
+        !!(document.getElementById('btn-setup') || document.querySelector('[data-action="setup"]')),
+        '',
+        'browser'
+      );
+      ok(
+        'code_mode_toggle',
+        !!(document.getElementById('btn-coding-mode') || document.querySelector('[data-mode="code"]')),
+        '',
+        'browser'
+      );
+      ok(
+        'user_input',
+        !!(document.getElementById('user-input') || document.querySelector('.input-deck')),
+        'composer',
+        'browser'
+      );
+    } else {
+      ok('setup_button', true, 'headless skip', 'browser');
+      ok('code_mode_toggle', true, 'headless skip', 'browser');
+      ok('user_input', true, 'headless skip', 'browser');
+    }
+    ok(
+      'composer_float',
+      !!(g.AETHER_ComposerFloat && g.AETHER_ComposerFloat.setMode),
+      g.AETHER_ComposerFloat ? 'online' : 'load core/aether-composer-float.js in app',
+      'browser'
+    );
+    var hasFs =
+      typeof g.showDirectoryPicker === 'function' ||
+      (typeof window !== 'undefined' && window && 'showDirectoryPicker' in window);
+    ok('fs_access_api', hasFs || !hasDom, hasFs ? 'File System Access' : 'needs Chrome/Edge HTTPS', 'browser');
+
+    // ── Live: session state (advisory — do not fail CI) ──────
+    var hasKey = false;
+    var provider = '';
+    try {
+      var cfg = g.apiConfig || (g.state && g.state.apiConfig) || null;
+      if (!cfg) {
+        try {
+          cfg = JSON.parse(
+            localStorage.getItem('aether_api_config') ||
+              localStorage.getItem('aether_config') ||
+              localStorage.getItem('aetherApiConfig') ||
+              'null'
+          );
+        } catch (e0) {}
+      }
+      if (cfg) {
+        provider = cfg.provider || cfg.model || '';
+        hasKey = !!(cfg.apiKey || cfg.key || (cfg.provider === 'local' && cfg.endpoint));
+      }
+    } catch (e1) {}
+    ok('live_provider', hasKey, hasKey ? String(provider || 'configured') : 'open SETUP · add key or local endpoint', 'live');
+
+    var folderLinked = !!(
+      g.codingFolderHandle ||
+      (typeof window !== 'undefined' && window.codingFolderHandle)
+    );
+    ok('live_folder', folderLinked, folderLinked ? 'CODE folder linked' : 'link folder in CODE mode', 'live');
+
+    var ghostPending = 0;
+    try {
+      if (g.AETHER_Ghost && g.AETHER_Ghost.loadQueue) {
+        ghostPending = g.AETHER_Ghost.loadQueue().filter(function (x) {
+          return x.status === 'pending';
+        }).length;
+      }
+    } catch (e2) {}
+    ok('live_ghost_queue', true, ghostPending + ' pending Ghost(s)', 'live');
+
+    var ragChunks = 0;
+    try {
+      if (g.AETHER_RAGv2 && g.AETHER_RAGv2.stats) {
+        var st = g.AETHER_RAGv2.stats();
+        ragChunks = (st && (st.chunks || st.total || 0)) || 0;
+      }
+    } catch (e3) {}
+    ok('live_rag', true, ragChunks + ' chunks indexed · try /rag index', 'live');
+
+    var hard = results.filter(function (r) {
+      return r.kind === 'hard';
+    });
+    var live = results.filter(function (r) {
+      return r.kind === 'live' || r.kind === 'browser';
+    });
+    var hardPass = hard.filter(function (r) {
+      return r.pass;
+    }).length;
+    var livePass = live.filter(function (r) {
+      return r.pass;
+    }).length;
+
+    var out = {
+      ok: hardPass === hard.length,
+      hardOk: hardPass === hard.length,
+      hardPassed: hardPass,
+      hardTotal: hard.length,
+      livePassed: livePass,
+      liveTotal: live.length,
+      passed: results.filter(function (r) {
+        return r.pass;
+      }).length,
+      total: results.length,
+      results: results,
+      version: VERSION,
+      product: g.AETHER_VERSION || '',
+      at: Date.now(),
+      steps: HERO_STEPS.slice(),
+    };
+    try {
+      localStorage.setItem(
+        'aether_heropath_last',
+        JSON.stringify({ ok: out.ok, at: out.at, hard: hardPass + '/' + hard.length })
+      );
+    } catch (e4) {}
+    return out;
+  }
+
+  var HERO_STEPS = [
+    {
+      n: 1,
+      title: 'SETUP',
+      detail: 'MODES → SETUP · pick Local (Ollama) or paste a free OpenRouter/Groq/Google key · Save',
+    },
+    {
+      n: 2,
+      title: 'CODE + folder',
+      detail: 'Toggle CODE · Link Folder (File System Access) · pick a project',
+    },
+    {
+      n: 3,
+      title: 'Ghost edit',
+      detail: 'Ask: "Add a one-line comment to README.md" · Accept the Ghost patch',
+    },
+    {
+      n: 4,
+      title: 'RAG index',
+      detail: 'Run `/rag index` · then `/rag search <keyword from your project>`',
+    },
+    {
+      n: 5,
+      title: 'Viz or shipcheck',
+      detail: 'Ask for a bar chart with a ```viz fence · or run `/shipcheck` / `/heropath`',
+    },
+  ];
+
+  function heroPathMarkdown(r) {
+    r = r || runHeroPath();
+    var lines = [
+      '**90-second hero path** — ' +
+        (r.hardOk ? '✓ READY' : '✗ GAPS') +
+        ' · hard ' +
+        r.hardPassed +
+        '/' +
+        r.hardTotal +
+        ' · live ' +
+        r.livePassed +
+        '/' +
+        r.liveTotal +
+        ' · product v' +
+        (r.product || '?'),
+      '',
+      '### Checklist (walk this cold)',
+      '',
+    ];
+    (r.steps || HERO_STEPS).forEach(function (s) {
+      lines.push(s.n + '. **' + s.title + '** — ' + s.detail);
+    });
+    lines.push('', '### Probes', '');
+    (r.results || []).forEach(function (x) {
+      var tag = x.kind || 'hard';
+      lines.push(
+        '- ' +
+          (x.pass ? '✓' : '✗') +
+          ' `' +
+          x.name +
+          '` _(' +
+          tag +
+          ')_' +
+          (x.detail ? ' — ' + x.detail : '')
+      );
+    });
+    lines.push(
+      '',
+      '_Hard = release modules. Browser = DOM/API. Live = your session (key + folder)._',
+      '',
+      'Slash: `/heropath` · `/shipcheck` · `/rag index` · `/viztest`'
+    );
+    return lines.join('\n');
+  }
+
+  /**
    * Full release gate: golden paths + markdown fixtures + tool suite.
    */
   function runShipCheck(registry) {
@@ -651,12 +892,30 @@
     sections.push({ name: 'modules', ok: softPass === soft.length, passed: softPass, total: soft.length, results: soft });
     if (softPass < soft.length) allOk = false;
 
+    // Hero path hard probes (live session checks are advisory inside runHeroPath)
+    var hero = runHeroPath();
+    var heroHard = (hero.results || []).filter(function (x) {
+      return x.kind === 'hard';
+    });
+    var heroHardPass = heroHard.filter(function (x) {
+      return x.pass;
+    }).length;
+    sections.push({
+      name: 'hero_path',
+      ok: hero.hardOk,
+      passed: heroHardPass,
+      total: heroHard.length,
+      results: heroHard,
+    });
+    if (!hero.hardOk) allOk = false;
+
     var out = {
       ok: allOk,
       version: VERSION,
       product: g.AETHER_VERSION || '',
       at: Date.now(),
       sections: sections,
+      hero: hero,
     };
     try {
       localStorage.setItem('aether_shipcheck_last', JSON.stringify({ ok: out.ok, at: out.at, product: out.product }));
@@ -808,6 +1067,9 @@
     shouldShowOnboard: shouldShowOnboard,
     runGoldenPaths: runGoldenPaths,
     goldenMarkdown: goldenMarkdown,
+    runHeroPath: runHeroPath,
+    heroPathMarkdown: heroPathMarkdown,
+    HERO_STEPS: HERO_STEPS,
     runShipCheck: runShipCheck,
     shipCheckMarkdown: shipCheckMarkdown,
     ragQuickStatsMarkdown: ragQuickStatsMarkdown,

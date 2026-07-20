@@ -2,7 +2,7 @@
   "name": "AETHER Neural Interface",
   "short_name": "AETHER",
   "description": "Neural OS — Agent Closure, Tool Runtime v2, Ghost, RAG index, Moat. GPL-3.0.",
-  "version": "5.39",
+  "version": "5.40",
   "start_url": "./index.html",
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
