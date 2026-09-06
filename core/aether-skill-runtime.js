@@ -1,5 +1,5 @@
 /**
- * AETHER Skill Runtime v5.30 — make skills operational
+ * AETHER Skill Runtime v5.40 — make skills operational
  * Copyright (C) 2026 The Architect · GPL-3.0-or-later
  *
  * - Workflow / playbook runner (step checklist + prompt kickoff)
@@ -13,7 +13,7 @@
 (function (g) {
   'use strict';
 
-  var VERSION = '5.30';
+  var VERSION = (typeof g.AETHER_VERSION !== 'undefined') ? g.AETHER_VERSION : '5.40';
   var RUN_KEY = 'aether_skill_run_v1';
   var PRESET_KEY = 'aether_skill_preset_v1';
   var POLICY_KEY = 'aether_skill_tool_policy';
@@ -766,14 +766,6 @@
         renderRunnerBar(el);
       };
     });
-  }
-
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 
   // ── Golden smoke tests ─────────────────────────────────────

@@ -1,5 +1,5 @@
 /**
- * AETHER Ship Layer v5.33 — golden paths, onboarding, offline, fusion glue
+ * AETHER Ship Layer v5.40 — golden paths, onboarding, offline, fusion glue
  * Copyright (C) 2026 The Architect · GPL-3.0-or-later
  *
  * Closes the product loop:
@@ -10,7 +10,7 @@
 (function (g) {
   'use strict';
 
-  var VERSION = '5.36';
+  var VERSION = (typeof g.AETHER_VERSION !== 'undefined') ? g.AETHER_VERSION : '5.40';
   var ONBOARD_KEY = 'aether_onboard_v1';
   var LAST_DR_KEY = 'aether_last_deep_research_v1';
   var GOLDEN_KEY = 'aether_golden_smoke_last';

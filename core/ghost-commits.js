@@ -24,10 +24,6 @@
     } catch (e) {}
   }
 
-  function uid(p) {
-    return (p || 'h') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-  }
-
   function diffStats(a, b) {
     var o = String(a).split('\n');
     var n = String(b).split('\n');
@@ -264,7 +260,7 @@
       var st0 = diffStats(String(spec.old_string), String(spec.new_string || ''));
       hunks = [
         {
-          id: uid('h'),
+          id: AETHER_Utils.uid('h'),
           oldStart: null,
           newStart: null,
           oldText: String(spec.old_string),
@@ -281,7 +277,7 @@
     }
 
     var item = {
-      id: uid('gc'),
+      id: AETHER_Utils.uid('gc'),
       path: spec.path || 'untitled.txt',
       before: before,
       after: after,
@@ -679,13 +675,6 @@
     _host.className = 'ghost-commits-dock';
     document.body.appendChild(_host);
     return _host;
-  }
-
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
   }
 
   function renderHunkBlock(item, hunk, idx) {

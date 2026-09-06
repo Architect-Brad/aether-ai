@@ -19,13 +19,6 @@
   var _barEl = null;
   var _autoVerify = false;
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   function loadJSON(key, fallback) {
     try {
       return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));

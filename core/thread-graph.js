@@ -249,13 +249,6 @@
     if (hit) focusNode(hit.id);
   }
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   // Track high-level activity from outside
   function trackMessage(role, preview, convId) {
     addNode({

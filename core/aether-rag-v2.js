@@ -766,13 +766,6 @@
     );
   }
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   async function clear(collection) {
     await ensureReady();
     if (!collection) {

@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════
-// AETHER Neural Interface v5.18 — Aether Code
+// AETHER Neural Interface v5.40 — Aether Code
 // Copyright (C) 2026 The Architect
 //
 // This program is free software: you can redistribute it and/or modify
@@ -31,6 +31,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Because typing document.getElementById() 200 times is a crime
     // against humanity. jQuery who? We don't need your 30KB library.
     const $ = id => document.getElementById(id);
+
+    // ─── GLOBAL ERROR BOUNDARY ───────────────────────────────
+    window.onerror = function (msg, src, line, col, err) {
+        try {
+            var detail = '[AETHER] Uncaught: ' + msg + ' at ' + (src || '') + ':' + line + ':' + col;
+            console.error(detail, err);
+            if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
+                AETHER_Kernel.log('ERROR boundary', detail, 'call', { ok: false });
+            }
+            var badge = document.getElementById('error-count-badge');
+            if (badge) {
+                badge.style.display = '';
+                badge.textContent = parseInt(badge.textContent || '0', 10) + 1;
+            }
+        } catch (_) {}
+    };
+    window.addEventListener('unhandledrejection', function (e) {
+        try {
+            var reason = e && e.reason ? (e.reason.message || String(e.reason)) : 'unknown';
+            console.error('[AETHER] Unhandled rejection:', reason);
+            if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
+                AETHER_Kernel.log('ERROR unhandled', reason, 'call', { ok: false });
+            }
+        } catch (_) {}
+    });
 
     // ═══════════════════════════════════════════════════════════
     // SECTION 1: DOM REFERENCES
@@ -357,6 +382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         rateLimitMs: 800,
         encryptionKey: null,
         passwordVerified: false,
+        encryptionPassphrase: null, // session-only; never persisted
         oramaDb: null,
         vectorRagEnabled: false,
         pistonRuntimes: null,
@@ -693,6 +719,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const pwd = passwordInput.value;
                 if (showConfirm && pwd !== passwordConfirm.value) { showNotification('Passwords do not match','error'); return; }
                 if (!pwd) { showNotification('Password required','error'); return; }
+                // Keep the passphrase in memory for this session (never persisted);
+                // keys are AES-256-GCM encrypted at rest using it.
+                state.encryptionPassphrase = pwd;
+                state.passwordVerified = true;
                 passwordModal.classList.add('hidden');
                 cleanup(); resolve(pwd);
             };
@@ -851,7 +881,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function saveApiConfig() {
         const ps = document.getElementById('provider-select');
         const cfg = { provider:ps?.value||'local', endpoint:endpointInput.value, apiKey:apiKeyInput.value, authHeader:authHeaderInput.value, model:modelInput.value };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+        if (state.passwordVerified && state.encryptionPassphrase) {
+            const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
+        } else {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
+        }
         apiConfig = { ...apiConfig, ...cfg };
         updateContextLimit();
         updateModelPill();
@@ -944,7 +979,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function loadHooksConfig() {
         const saved = localStorage.getItem(HOOKS_KEY);
         if (!saved) return;
-        try { const p = JSON.parse(saved); hooksConfig = {...hooksConfig,...p}; } catch {}
+        let p = null;
+        // Encrypted blob (AES-256-GCM) → unlock with session passphrase; else legacy plaintext
+        try {
+            if (isEncrypted(saved)) {
+                if (!state.encryptionPassphrase) {
+                    const pwd = await promptForPassword('unlock');
+                    if (!pwd) return; // user dismissed — leave keys empty until unlocked
+                }
+                const decrypted = await decryptData(JSON.parse(saved), state.encryptionPassphrase);
+                if (!decrypted) { showNotification('Wrong password — keys locked','error'); return; }
+                try { p = JSON.parse(decrypted); } catch (e) { p = null; }
+            } else {
+                try { p = JSON.parse(saved); } catch (e) { p = null; }
+            }
+        } catch (e) { p = null; }
+        if (!p) return;
+        hooksConfig = {...hooksConfig,...p};
         gmailKey.value=hooksConfig.gmail; outlookKey.value=hooksConfig.outlook;
         tavilyKey.value=hooksConfig.tavily; braveKey.value=hooksConfig.brave;
         serperKey.value=hooksConfig.serper; if(puterKey) puterKey.value=hooksConfig.puter;
@@ -1013,17 +1064,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             sttGoogleKey:g('stt-google-key'), sttVoskUrl:g('stt-vosk-url','http://localhost:2700'),
             sttLanguage:g('stt-language','en-US'),
         };
-        localStorage.setItem(HOOKS_KEY, JSON.stringify(cfg));
+        // Encrypt at rest when a session passphrase is active (AES-256-GCM via WebCrypto)
+        if (state.passwordVerified && state.encryptionPassphrase) {
+            const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
+            localStorage.setItem(HOOKS_KEY, JSON.stringify(blob));
+        } else {
+            localStorage.setItem(HOOKS_KEY, JSON.stringify(cfg));
+        }
         hooksConfig = {...hooksConfig,...cfg};
-        // Mirror plain keys for Discovery skill host sync (same-origin only)
-        try {
-            localStorage.setItem('aether_hooks_plain', JSON.stringify({
-                tavily: cfg.tavily || '',
-                serper: cfg.serper || '',
-                brave: cfg.brave || '',
-                openweather: cfg.weather || '',
-            }));
-        } catch (e) {}
+        // NOTE: legacy aether_hooks_plain mirror removed in v5.40 — the Discovery
+        // KeyStore sync reads in-memory __AETHER_HOOKS, not a secondary plaintext copy.
         // Save TTS config
         const ttsEng = ($('tts-engine')||{value:'none'}).value;
         const ttsPiper = ($('tts-piper-url')||{value:'http://localhost:5000/tts'}).value;
@@ -1034,7 +1084,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateTTSIndicator();
         showNotification('Hooks saved','success');
         updateServicesStatus();
-        try { if (typeof syncDiscoveryKeysFromHooks === 'function') syncDiscoveryKeysFromHooks(); } catch(e) {}
+        try { if (typeof syncDiscoveryKeysFromHooks === 'function') syncDiscoveryKeysFromHooks(); } catch(e) { console.warn('[AETHER] sync discovery keys:', e.message); }
     }
 
     function updateServicesStatus() {
@@ -6028,7 +6078,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (typeof AETHER_Kernel !== 'undefined' && AETHER_Kernel.log) {
                     AETHER_Kernel.log(key, preview.slice(0, 80), cls, { ok: ok, ms: ms, retries: attempts - 1 });
                 }
-            } catch (_) {}
+            } catch (_) { /* kernel log failed */ }
             try {
                 if (RT && RT.pushHistory) {
                     const prev = (SEC && SEC.redactSecrets) ? SEC.redactSecrets(preview) : preview;
@@ -10383,8 +10433,6 @@ Deliver maximum value per token. Logic governs all output.
 
         header.appendChild(runBtn);
     }
-
-    function escapeHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
     // ─── OCR ─────────────────────────────────────────────────
     async function initPaddleOcr() {

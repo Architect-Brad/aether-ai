@@ -61,17 +61,6 @@
     },
   };
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
-  function uid() {
-    return 'sub_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-  }
-
   function getDisplay() {
     return document.getElementById('chat-display');
   }
@@ -302,7 +291,7 @@
       return null;
     }
     var job = {
-      id: uid(),
+      id: AETHER_Utils.uid('sub'),
       role: role,
       goal: goal,
       status: 'queued',

@@ -227,6 +227,7 @@ function main() {
 
   const modules = [
     'core/version.js',
+    'core/utils.js',
     'core/safe-math.js',
     'core/aether-markdown.js',
     'core/aether-tool-runtime.js',

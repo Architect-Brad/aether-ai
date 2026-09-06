@@ -13,10 +13,6 @@
   var _panel = null;
   var _listeners = [];
 
-  function uid(p) {
-    return (p || 'f') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-  }
-
   function classify(name) {
     name = String(name || '').toLowerCase();
     if (/read_file|fs_read|fs_list|fs_stat|fs_exists|glob|grep|cat/.test(name)) return 'read';
@@ -44,7 +40,7 @@
   function beginFlight(meta) {
     meta = meta || {};
     _active = {
-      id: uid('flight'),
+      id: AETHER_Utils.uid('flight'),
       goal: meta.goal || 'session',
       kind: meta.kind || 'agent',
       startedAt: Date.now(),
@@ -210,14 +206,6 @@
         ? _active.id.slice(0, 14) + ' · ' + _active.status
         : 'idle · ' + loadFlights().length + ' archived';
     }
-  }
-
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
   }
 
   function exportActive() {

@@ -9,13 +9,6 @@
   var _cache = { t: 0, data: null };
   var CACHE_MS = 8000;
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   async function readGitFile(relPath) {
     if (typeof g.fsFolderRead !== 'function') return null;
     try {

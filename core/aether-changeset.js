@@ -22,17 +22,6 @@
     } catch (e) {}
   }
 
-  function uid() {
-    return 'cs_' + Date.now().toString(36);
-  }
-
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   function pendingGhosts() {
     if (!g.AETHER_Ghost || !g.AETHER_Ghost.loadQueue) return [];
     return g.AETHER_Ghost.loadQueue().filter(function (x) {
@@ -79,7 +68,7 @@
       autoSummary(files, adds, dels);
 
     var cs = {
-      id: uid(),
+      id: AETHER_Utils.uid('cs'),
       t: Date.now(),
       title: title,
       body: body,

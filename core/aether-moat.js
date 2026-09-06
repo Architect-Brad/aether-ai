@@ -190,10 +190,6 @@
     } catch (e) {}
   }
 
-  function uid(p) {
-    return (p || 'p') + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
-  }
-
   /**
    * Record a moat-relevant event.
    * @param {string} kind — ghost|research|skill|flight|tool|handoff|security|session
@@ -204,7 +200,7 @@
     var list = loadProvenance();
     var prev = list[0];
     var entry = {
-      id: uid('moat'),
+      id: AETHER_Utils.uid('moat'),
       t: Date.now(),
       kind: kind || 'event',
       title: payload.title || kind,
@@ -707,13 +703,6 @@
         );
       })
       .join('');
-  }
-
-  function escapeHtml(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
   }
 
   // Public

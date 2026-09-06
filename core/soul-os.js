@@ -303,14 +303,8 @@
     }).join('');
   }
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
   function escAttr(s) {
-    return esc(s).replace(/"/g, '&quot;');
+    return escapeHtml(s);
   }
 
   function init() {

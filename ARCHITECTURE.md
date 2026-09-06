@@ -1,4 +1,4 @@
-# AETHER Architecture (v5.16 Beast Mode)
+# AETHER Architecture (v5.40 Beast Mode)
 
 ## Thesis
 
@@ -52,6 +52,7 @@ AETHER is a **browser-native agent OS**: multi-provider chat, tools, workspace m
 | Phase | Goal |
 |-------|------|
 | **Done (5.16)** | `core/version`, `safe-math`, `capabilities`, `beast-mode` |
+| **Done (5.40)** | `core/utils.js` — canonical `esc`/`uid`/constants; 15 local `esc`/`uid` copies removed |
 | Next | Extract `TOOL_REGISTRY` domains to `core/tools/*.js` |
 | Next | Extract markdown + streaming to `core/render/` |
 | Later | Convert main entry to `type="module"` once globals are eliminated |
@@ -62,7 +63,7 @@ Constraint: **no bundler**. Prefer classic scripts → then ES modules.
 
 | Asset | Protection |
 |-------|------------|
-| API keys at rest | Optional AES-256-GCM + PBKDF2 |
+| API keys at rest | Optional AES-256-GCM + PBKDF2 (session passphrase in memory; keys encrypted on save, unlocked on load) |
 | API keys in use | Session memory only |
 | Math tool | Restricted evaluator / mathjs (no eval) |
 | Skills | Architect-authored only |

@@ -41,14 +41,6 @@
 
   // ── Escape / sanitize ──────────────────────────────────────
 
-  function esc(s) {
-    return String(s == null ? '' : s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-
   function safeHref(url) {
     var u = String(url || '').trim();
     if (!u) return '#';
@@ -972,7 +964,7 @@
     stabilizeForStream: stabilizeForStream,
     normLang: normLang,
     parseCodingFence: parseCodingFence,
-    esc: esc,
+    esc: escapeHtml,
     safeHref: safeHref,
     runGoldenFixtures: runGoldenFixtures,
     getLog: function () {

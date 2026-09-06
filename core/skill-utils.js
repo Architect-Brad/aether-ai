@@ -397,13 +397,15 @@
       });
     } catch (e) {}
 
-    // Main app often stores encrypted hooks under aether_hooks — try plain JSON mirror
+    // Main app keeps keys in memory (decrypted session) under __AETHER_HOOKS —
+    // no plaintext mirror persists to localStorage. Legacy aether_hooks_plain
+    // reads are intentionally unsupported after v5.40 (keys encrypted at rest).
     try {
-      var plain = localStorage.getItem('aether_hooks_plain');
-      if (plain) {
-        var p = JSON.parse(plain);
+      var live = (typeof window !== 'undefined' && window.__AETHER_HOOKS) || g.__AETHER_HOOKS;
+      if (live && typeof live === 'object') {
         ['tavily', 'serper', 'brave', 'openweather'].forEach(function (k) {
-          if (p[k] && (!KeyStore.has || !KeyStore.has(k))) KeyStore.set(k, p[k]);
+          var v = live[k] || live[k + 'Key'];
+          if (v && (!KeyStore.has || !KeyStore.has(k))) KeyStore.set(k, v);
         });
       }
     } catch (e) {}

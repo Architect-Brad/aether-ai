@@ -21,13 +21,6 @@
   var MAX_SERVERS = 20;
   var MAX_RESULT = 14000;
 
-  function esc(s) {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-  }
-
   function loadServers() {
     try {
       return JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
