@@ -20111,6 +20111,41 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
         });
     }
 
+    // ── Feature Packs (CFG → Feature Packs) ───────────────────
+    function renderFeaturePacks() {
+        const host = document.getElementById('feature-packs-list');
+        if (!host) return;
+        if (typeof AETHER_Packs === 'undefined' || !AETHER_Packs.list) {
+            host.innerHTML = '<div class="setting-hint">Pack loader not available</div>';
+            return;
+        }
+        const packs = AETHER_Packs.list();
+        host.innerHTML = packs.map(p => `
+            <div class="setting-item">
+                <label class="toggle-label">
+                    <input type="checkbox" class="pack-toggle" data-pack="${p.id}" ${p.enabled ? 'checked' : ''}>
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-text">${p.label}</span>
+                </label>
+                <div class="setting-hint">${p.desc}</div>
+            </div>`).join('');
+        host.querySelectorAll('.pack-toggle').forEach(toggle => {
+            toggle.addEventListener('change', () => {
+                const id = toggle.getAttribute('data-pack');
+                const on = toggle.checked;
+                AETHER_Packs.setEnabled(id, on)
+                    .then(() => {
+                        showNotification((on ? 'Enabled: ' : 'Disabled: ') + id.replace(/-/g, ' '),
+                            on ? 'success' : 'info');
+                    })
+                    .catch(e => {
+                        toggle.checked = !on;
+                        showNotification('Pack failed: ' + (e && e.message ? e.message : id), 'error');
+                    });
+            });
+        });
+    }
+
     function applyWaveEnabled(on) {
         state.waveEnabled = on !== false;
         const pane = document.getElementById('aether-pane');
@@ -20147,6 +20182,7 @@ Examples: {"action":"search","query":"..."} {"action":"weather","location":"Toky
     if(btnSettings) btnSettings.addEventListener('click',()=>{
         settingsModal?.classList.remove('hidden');
         renderThemePicker();
+        renderFeaturePacks();
         const wt = document.getElementById('wave-enabled-toggle');
         if (wt) wt.checked = state.waveEnabled !== false;
         const ct = document.getElementById('wave-calm-toggle');

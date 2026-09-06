@@ -228,6 +228,7 @@ function main() {
   const modules = [
     'core/version.js',
     'core/utils.js',
+    'core/pack-loader.js',
     'core/safe-math.js',
     'core/aether-markdown.js',
     'core/aether-tool-runtime.js',
@@ -446,6 +447,7 @@ function main() {
   // Structural file checks
   const mustExist = [
     'core/version.js',
+    'core/pack-loader.js',
     'core/aether-markdown.js',
     'core/aether-tool-runtime.js',
     'core/aether-visualizer.js',
