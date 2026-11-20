@@ -64,8 +64,11 @@
     var s = String(text == null ? '' : text);
     for (var i = 0; i < SECRET_PATTERNS.length; i++) {
       s = s.replace(SECRET_PATTERNS[i], function () {
-        if (arguments.length >= 3 && typeof arguments[1] === 'string' && arguments[1].length < 40) {
-          // groups like api_key=
+        // Prefix patterns (api_key=, password=, secret=) have TWO capture
+        // groups, so the callback gets [match, prefix, secret, offset, string].
+        // Re-emitting group 1 keeps the label and drops the secret. Single-group
+        // token patterns get 4 args and group 1 IS the secret — never echo it.
+        if (arguments.length >= 5 && typeof arguments[1] === 'string') {
           return arguments[1] + '[REDACTED]';
         }
         return '[REDACTED]';

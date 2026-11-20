@@ -56,16 +56,24 @@
     return cfg[id] === undefined ? !!pk.default : !!cfg[id];
   }
 
-  /** Inject the pack's script and resolve on load/error. No-op if already loaded. */
+  /** Inject the pack's script and resolve on load/error. Re-inits after disable. */
   function load(id) {
     var pk = MANIFEST[id];
     if (!pk) return Promise.reject(new Error('Unknown pack: ' + id));
-    if (loaded[id]) return Promise.resolve(g[pk.global] || true);
-    // Already present (e.g. rollback of a boot-time removal) — treat as loaded.
-    if (g[pk.global]) { loaded[id] = true; return Promise.resolve(g[pk.global]); }
+    // A disabled pack keeps its global (other modules guard on it) but its
+    // timers/listeners were torn down. Re-run its idempotent init on re-enable.
+    if (loaded[id] || g[pk.global]) {
+      loaded[id] = true;
+      var api = g[pk.global];
+      if (api && typeof api.init === 'function') {
+        try { api.init(); } catch (e) {}
+      }
+      return Promise.resolve(api || true);
+    }
 
     return new Promise(function (resolve, reject) {
       var s = document.createElement('script');
+      s.id = 'aether-pack-' + id;
       s.async = true;
       s.src = pk.src;
       s.onload = function () { loaded[id] = true; resolve(g[pk.global] || true); };
@@ -74,13 +82,19 @@
     });
   }
 
-  /** Enable/disable a pack and (re)load it if turning on. */
+  /** Enable/disable a pack — disabling tears down the injected pack's effects. */
   function setEnabled(id, on) {
     if (!MANIFEST[id]) return Promise.reject(new Error('Unknown pack: ' + id));
     var cfg = readCfg();
     cfg[id] = !!on;
     writeCfg(cfg);
     if (on) return load(id);
+    var api = g[MANIFEST[id].global];
+    if (api && typeof api.destroy === 'function') {
+      try { api.destroy(); } catch (e) {}
+    }
+    var el = document.getElementById('aether-pack-' + id);
+    if (el && el.remove) el.remove();
     loaded[id] = false;
     return Promise.resolve();
   }

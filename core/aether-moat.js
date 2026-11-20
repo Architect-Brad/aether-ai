@@ -405,7 +405,7 @@
       provenance: loadProvenance().slice(0, 80),
       recentFlights: flights,
       ghostQueueSummary: ghosts.map(function (x) {
-        return { path: x.path, status: x.status, adds: x.adds, dels: x.dels, id: x.id };
+        return { path: x.path, status: x.status, adds: x.stats && x.stats.adds, dels: x.stats && x.stats.dels, id: x.id };
       }),
       skillsActive: (g.activeSkills || []).map(function (s) {
         return s.name || s;

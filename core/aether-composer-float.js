@@ -29,6 +29,8 @@
   var _dragDelta = 0;
   var _didDragSnap = false; // prevent click from undoing pointer-up snap
   var _bound = false;
+  var _handlers = []; // tracked so disabling the pack can unbind every listener
+  var _ro = null;
 
   function isNarrow() {
     return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 820px)').matches;
@@ -264,44 +266,45 @@
     }, 50);
   }
 
+  function _on(target, type, fn, opts) {
+    if (!target) return;
+    target.addEventListener(type, fn, opts);
+    _handlers.push([target, type, fn, opts]);
+  }
+
   function wireEvents() {
     if (_bound || !_deck) return;
     _bound = true;
 
-    if (_handle) {
-      // Pointer events cover mouse + touch (no separate touch listeners — avoids double-fire)
-      _handle.addEventListener('pointerdown', onPointerDown, { passive: false });
-      window.addEventListener('pointermove', onPointerMove, { passive: true });
-      window.addEventListener('pointerup', onPointerUp, { passive: true });
-      window.addEventListener('pointercancel', onPointerUp, { passive: true });
-      _handle.addEventListener('click', function (e) {
-        // Tap handle = toggle only if we did not just snap via drag
-        if (_didDragSnap) {
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        }
-        if (Math.abs(_dragDelta) < 8) toggle();
-      });
-    }
-    // Prefer PointerEvent only — avoid double-firing with touch on hybrid browsers
-    // (touch listeners removed; pointer covers mouse + touch)
-    if (_toggle) _toggle.addEventListener('click', function () { toggle(); });
+    // Pointer events cover mouse + touch (no separate touch listeners — avoids double-fire)
+    _on(_handle, 'pointerdown', onPointerDown, { passive: false });
+    _on(window, 'pointermove', onPointerMove, { passive: true });
+    _on(window, 'pointerup', onPointerUp, { passive: true });
+    _on(window, 'pointercancel', onPointerUp, { passive: true });
+    _on(_handle, 'click', function (e) {
+      // Tap handle = toggle only if we did not just snap via drag
+      if (_didDragSnap) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (Math.abs(_dragDelta) < 8) toggle();
+    });
+
+    _on(_toggle, 'click', function () { toggle(); });
 
     // Keyboard / visual viewport
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', updateViewportInsets);
-      window.visualViewport.addEventListener('scroll', updateViewportInsets);
-    }
-    window.addEventListener('resize', updateViewportInsets);
-    window.addEventListener('orientationchange', function () {
+    _on(window.visualViewport, 'resize', updateViewportInsets);
+    _on(window.visualViewport, 'scroll', updateViewportInsets);
+    _on(window, 'resize', updateViewportInsets);
+    _on(window, 'orientationchange', function () {
       setTimeout(updateViewportInsets, 200);
     });
 
     // Auto-raise when focusing input on narrow screens (keyboard coming up)
     var input = document.getElementById('user-input');
     if (input) {
-      input.addEventListener('focus', function () {
+      _on(input, 'focus', function () {
         updateViewportInsets();
         if (isNarrow() && _mode === 'docked') {
           // Soft auto-raise so keyboard doesn't bury the field
@@ -313,17 +316,15 @@
           }, 80);
         }
       });
-      input.addEventListener('blur', function () {
+      _on(input, 'blur', function () {
         setTimeout(updateViewportInsets, 100);
       });
     }
 
     // Keep spacer in sync when textarea grows
     if (typeof ResizeObserver !== 'undefined' && _deck) {
-      var ro = new ResizeObserver(function () {
-        syncSpacer();
-      });
-      ro.observe(_deck);
+      _ro = new ResizeObserver(function () { syncSpacer(); });
+      _ro.observe(_deck);
     }
   }
 
@@ -336,11 +337,30 @@
     return true;
   }
 
+  /** Unbind every listener and clear pack-owned UI state (pack disable path). */
+  function destroy() {
+    _handlers.forEach(function (h) {
+      try { h[0].removeEventListener(h[1], h[2], h[3]); } catch (e) {}
+    });
+    _handlers = [];
+    if (_ro) {
+      try { _ro.disconnect(); } catch (e) {}
+      _ro = null;
+    }
+    _bound = false;
+    _dragging = false;
+    _dragDelta = 0;
+    document.body.classList.remove('composer-raised', 'composer-docked', 'composer-kb-open');
+    if (_deck) _deck.classList.remove('is-raised', 'is-docked', 'is-floating', 'is-dragging');
+    if (_spacer) _spacer.style.height = '';
+  }
+
   g.AETHER_ComposerFloat = {
     version: VERSION,
     init: init,
     setMode: setMode,
     toggle: toggle,
+    destroy: destroy,
     getMode: function () {
       return _mode;
     },

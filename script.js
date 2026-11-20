@@ -7582,17 +7582,45 @@ window.bgAddTask = () => showAetherDialog({
                 imageUrl = d.data?.[0]?.url || (d.data?.[0]?.b64_json ? 'data:image/png;base64,'+d.data[0].b64_json : null);
             }
             if (!imageUrl) throw new Error('No image returned');
-            const safePrompt = escapeHtml(prompt).replace(/"/g,'&quot;');
-            imgEl.innerHTML = `<div class="flux-result">
-                <div class="flux-rh"><span class="flux-badge">FLUX.2 · ${model}</span>
-                    <div class="flux-ra">
-                        <button class="flux-btn" onclick="downloadFluxImage('${imageUrl.startsWith('data')?'blob':'url'}','${imageUrl.startsWith('data')?imageUrl:''}','${imageUrl.startsWith('http')?imageUrl:''}')">↓ Save</button>
-                        <button class="flux-btn" onclick="showFluxEdit('${safePrompt}')">✏ Edit</button>
-                        <button class="flux-btn" onclick="generateFluxImage('${safePrompt}')">↺ Regen</button>
-                    </div></div>
-                <img src="${imageUrl}" class="flux-img" alt="${safePrompt}" loading="lazy">
-                <div class="flux-cap">${safePrompt}</div>
-            </div>`;
+            // DOM APIs only: interpolating a model-supplied prompt or imageUrl
+            // into innerHTML / inline handlers allows attribute-breakout XSS.
+            const result = document.createElement('div');
+            result.className = 'flux-result';
+            const head = document.createElement('div');
+            head.className = 'flux-rh';
+            const badge = document.createElement('span');
+            badge.className = 'flux-badge';
+            badge.textContent = 'FLUX.2 · ' + model;
+            const actions = document.createElement('div');
+            actions.className = 'flux-ra';
+            const mkBtn = (label, fn) => {
+                const b = document.createElement('button');
+                b.className = 'flux-btn';
+                b.textContent = label;
+                b.addEventListener('click', fn);
+                actions.appendChild(b);
+            };
+            mkBtn('↓ Save', () => window.downloadFluxImage(
+                imageUrl.startsWith('data') ? 'blob' : 'url',
+                imageUrl.startsWith('data') ? imageUrl : '',
+                imageUrl.startsWith('http') ? imageUrl : ''
+            ));
+            mkBtn('✏ Edit', () => window.showFluxEdit(prompt));
+            mkBtn('↺ Regen', () => generateFluxImage(prompt, { model }));
+            head.appendChild(badge);
+            head.appendChild(actions);
+            const img = document.createElement('img');
+            img.className = 'flux-img';
+            img.loading = 'lazy';
+            img.alt = prompt;
+            img.src = imageUrl;
+            const cap = document.createElement('div');
+            cap.className = 'flux-cap';
+            cap.textContent = prompt;
+            result.appendChild(head);
+            result.appendChild(img);
+            result.appendChild(cap);
+            imgEl.replaceChildren(result);
             smoothScrollToBottom();
             const conv = getCurrentConversation();
             if (conv) { conv.messages.push({role:'assistant',content:`[Image generated: ${prompt}]`}); saveConversations(); }
@@ -13841,7 +13869,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         const title = conv?.title || 'this conversation';
         showAetherDialog({
             title: 'Delete Conversation',
-            html: `<p style="color:#99aabb">Delete <strong style="color:#ccd">"${title.slice(0,60)}"</strong>?<br><span style="color:#445;font-size:.72rem">This cannot be undone.</span></p>`,
+            html: `<p style="color:#99aabb">Delete <strong style="color:#ccd">"${escapeHtml(title.slice(0,60))}"</strong>?<br><span style="color:#445;font-size:.72rem">This cannot be undone.</span></p>`,
             confirmLabel: 'DELETE',
             cancelLabel: 'CANCEL',
             onConfirm: async () => {
@@ -13888,7 +13916,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 if (isProcessing) item.classList.add('processing');
                 const d = new Date(conv.updated);
                 const ts = d.toLocaleDateString() + ' ' + d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
-                item.innerHTML = `<div class="conversation-title">${conv.title}${isProcessing ? ' <span class="conv-processing-dot"></span>' : ''}</div><div class="conversation-meta"><span>${ts}</span><button class="conversation-delete" data-id="${conv.id}">&#x2715;</button></div>`;
+                item.innerHTML = `<div class="conversation-title">${escapeHtml(conv.title)}${isProcessing ? ' <span class="conv-processing-dot"></span>' : ''}</div><div class="conversation-meta"><span>${ts}</span><button class="conversation-delete" data-id="${escapeHtml(conv.id)}">&#x2715;</button></div>`;
                 item.addEventListener('click', e => {
                     if (!e.target.classList.contains('conversation-delete')) {
                         setActiveConversation(conv.id);
@@ -16713,9 +16741,10 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
         let zipData = null;
         if (codingFolderHandle) {
             try {
-                const fh = await fsGetHandle(zipName);
+                const safeName = assertSafeFsPath(zipName, false);
+                const fh = await codingFolderHandle.getFileHandle(safeName);
                 zipData  = await fh.getFile();
-            } catch {}
+            } catch (e) { /* fall through to virtual workspace / uploaded blob */ }
         }
         if (!zipData) {
             const b64 = wsFileCache[zipName];
@@ -20968,12 +20997,12 @@ Format the final summary as a single, clean text block divided into the five lab
                 const feats = onboardData.features||{};
                 const activeFeats = [feats.cot&&'CoT',feats.stream&&'Streaming',feats.research&&'Deep Research',feats.tts&&'TTS'].filter(Boolean);
                 s.innerHTML = `
-                    <div class="ob-sum-row"><span>Name</span><span>${onboardData.name||'Anonymous'}</span></div>
-                    <div class="ob-sum-row"><span>Personality</span><span style="color:${persona.color}">${persona.name} — ${persona.tag}</span></div>
-                    <div class="ob-sum-row"><span>Response Style</span><span>${onboardData.responseStyle||'Balanced'}</span></div>
-                    <div class="ob-sum-row"><span>Preferred AI</span><span>${modelLabels[onboardData.preferredModel]||'Local'}</span></div>
-                    <div class="ob-sum-row"><span>Interests</span><span>${(onboardData.interests||[]).slice(0,3).join(', ')||'Not set'}</span></div>
-                    <div class="ob-sum-row"><span>Features</span><span>${activeFeats.length?activeFeats.join(' · '):'Defaults'}</span></div>`;
+                    <div class="ob-sum-row"><span>Name</span><span>${escapeHtml(onboardData.name||'Anonymous')}</span></div>
+                    <div class="ob-sum-row"><span>Personality</span><span style="color:${escapeHtml(persona.color||'#00f3ff')}">${escapeHtml(persona.name)} — ${escapeHtml(persona.tag)}</span></div>
+                    <div class="ob-sum-row"><span>Response Style</span><span>${escapeHtml(onboardData.responseStyle||'Balanced')}</span></div>
+                    <div class="ob-sum-row"><span>Preferred AI</span><span>${escapeHtml(modelLabels[onboardData.preferredModel]||'Local')}</span></div>
+                    <div class="ob-sum-row"><span>Interests</span><span>${escapeHtml((onboardData.interests||[]).slice(0,3).join(', ')||'Not set')}</span></div>
+                    <div class="ob-sum-row"><span>Features</span><span>${escapeHtml(activeFeats.length?activeFeats.join(' · '):'Defaults')}</span></div>`;
             }
         }
     }
@@ -21389,6 +21418,12 @@ Format the final summary as a single, clean text block divided into the five lab
     try {
         window.fsFolderShell = fsFolderShell;
         window.fsFolderRead = fsFolderRead;
+        // Bridges for showActiveWorkspaceGreeting() (top-level, outside this IIFE)
+        window._state = state;
+        window._wsFileCache = typeof wsFileCache !== 'undefined' ? wsFileCache : window._wsFileCache;
+        window.callModelDirect = typeof callModelDirect === 'function' ? callModelDirect : window.callModelDirect;
+        window.readAetherMd = typeof readAetherMd === 'function' ? readAetherMd : window.readAetherMd;
+        window.fsBuildSnapshot = typeof fsBuildSnapshot === 'function' ? fsBuildSnapshot : window.fsBuildSnapshot;
         window.fsFolderExists = typeof fsFolderExists === 'function' ? fsFolderExists : window.fsFolderExists;
         window.callAISimple = typeof callAISimple === 'function' ? callAISimple : window.callAISimple;
         window.callTool = callTool;

@@ -9,6 +9,10 @@
   // Off by default — opt-in via Beast / theater toggle (avoids permanent rAF cost)
   var _enabled = false;
   var _hooked = false;
+  var _stopped = false;
+  var _decayTimer = null;
+  var _loopTimer = null;
+  var _loopId = null;
 
   function setReasoning(level) {
     // 0..1
@@ -17,11 +21,13 @@
 
   function pulseReasoning() {
     _reasonAmp = 1;
-    var decay = setInterval(function () {
+    if (_decayTimer) clearInterval(_decayTimer);
+    _decayTimer = setInterval(function () {
       _reasonAmp *= 0.92;
       if (_reasonAmp < 0.05) {
         _reasonAmp = 0;
-        clearInterval(decay);
+        clearInterval(_decayTimer);
+        _decayTimer = null;
       }
     }, 50);
   }
@@ -111,10 +117,11 @@
   }
 
   function loop() {
+    if (_stopped) return;
     if (!_enabled) {
       // Park the rAF loop while theater is off — saves main-thread work on mobile
-      setTimeout(function () {
-        requestAnimationFrame(loop);
+      _loopTimer = setTimeout(function () {
+        _loopId = requestAnimationFrame(loop);
       }, 500);
       return;
     }
@@ -129,7 +136,7 @@
       ctx.clearRect(0, 0, layer.width, layer.height);
       drawOverlay(ctx, layer.width, layer.height, performance.now ? performance.now() : Date.now());
     }
-    requestAnimationFrame(loop);
+    _loopId = requestAnimationFrame(loop);
   }
 
   function setEnabled(on) {
@@ -140,12 +147,32 @@
   function init() {
     if (_hooked) return;
     _hooked = true;
+    _stopped = false;
     // Beast mode → theater on
     if (g.AETHER_Beast && g.AETHER_Beast.isEnabled && g.AETHER_Beast.isEnabled()) setEnabled(true);
-    setTimeout(function () {
+    _loopTimer = setTimeout(function () {
+      if (_stopped) return;
       ensureLayer();
-      requestAnimationFrame(loop);
+      _loopId = requestAnimationFrame(loop);
     }, 1000);
+  }
+
+  /** Stop every timer/loop and remove the overlay (called when the pack is disabled). */
+  function destroy() {
+    _enabled = false;
+    _stopped = true;
+    _hooked = false;
+    _reasonAmp = 0;
+    _toolGlyphs = [];
+    if (_decayTimer) clearInterval(_decayTimer);
+    if (_loopTimer) clearTimeout(_loopTimer);
+    if (_loopId) cancelAnimationFrame(_loopId);
+    _decayTimer = null;
+    _loopTimer = null;
+    _loopId = null;
+    document.documentElement.classList.remove('cognition-theater');
+    var layer = document.getElementById('aether-theater-layer');
+    if (layer && layer.remove) layer.remove();
   }
 
   g.AETHER_Theater = {
@@ -156,6 +183,7 @@
     setEnabled: setEnabled,
     drawOverlay: drawOverlay,
     init: init,
+    destroy: destroy,
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
