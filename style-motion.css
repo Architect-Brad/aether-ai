@@ -1,0 +1,56 @@
+/**
+ * AETHER Motion Layer — additive GPU hints only.
+ * Load after style.css / style-ivory.css. Rewrites nothing; promotes only the
+ * few always-on loops that actually benefit from their own compositor layer.
+ * Rule of the house: transform + opacity are cheap, box-shadow is not.
+ */
+
+/* ── Modest will-change hints for ambient loops (no blanket layer spam). */
+.logo-ring,
+.typing-dots span,
+.streaming-cursor,
+.fr,
+.flux-spark,
+.cr {
+  will-change: opacity, transform;
+}
+
+/* Drag writes transform every pointermove — promote only while dragging. */
+.input-deck.is-dragging {
+  will-change: transform;
+}
+
+/* Theater canvas redraws off the shared ticker; keep it composited. */
+.aether-theater-layer {
+  will-change: transform;
+}
+
+/* ── Reduced motion: the interface stays usable, the atmosphere stands down.
+   Decorative loops stop outright; everything else lands instantly. */
+@media (prefers-reduced-motion: reduce) {
+  .scanline,
+  .logo-ring,
+  .logo-text,
+  .typing-dots span,
+  .streaming-cursor,
+  .fr,
+  .flux-spark,
+  .cr,
+  .ald span,
+  .ali.spin,
+  .ali.pulse-cyan,
+  .ali.glow-hex,
+  .ali.wave,
+  .ali.orbit,
+  .stt-btn.recording {
+    animation: none !important;
+  }
+
+  /* Standard clamp: entrances, transitions and smooth scroll become instant. */
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

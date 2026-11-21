@@ -13,6 +13,15 @@
   var _decayTimer = null;
   var _loopTimer = null;
   var _loopId = null;
+  var _loopActive = false;      // legacy or shared-ticker loop is scheduled
+  var _smoothSub = null;        // frame fn subscribed to AETHER_Smooth
+  var _visibilityStop = null;   // cleanup from pauseWhenVisible()
+
+  // Smooth runtime is optional and may load before or after this pack.
+  function smooth() {
+    var s = g.AETHER_Smooth;
+    return s && typeof s.subscribe === 'function' ? s : null;
+  }
 
   function setReasoning(level) {
     // 0..1
@@ -116,6 +125,26 @@
     return layer;
   }
 
+  /** One frame of theater work — no scheduling, safe from any ticker. */
+  function frame(t) {
+    if (_stopped || !_enabled) return;
+    var s = smooth();
+    if (s && typeof s.motionEnabled === 'function' && !s.motionEnabled()) return;
+    var layer = ensureLayer();
+    var base = document.getElementById('aether-wave');
+    if (layer && base) {
+      if (layer.width !== base.clientWidth || layer.height !== base.clientHeight) {
+        layer.width = base.clientWidth || 800;
+        layer.height = base.clientHeight || 120;
+      }
+      var ctx = layer.getContext('2d');
+      if (!ctx) return;
+      ctx.clearRect(0, 0, layer.width, layer.height);
+      drawOverlay(ctx, layer.width, layer.height, t || (performance.now ? performance.now() : Date.now()));
+    }
+  }
+
+  /** Legacy self-scheduling loop — only used when AETHER_Smooth is absent. */
   function loop() {
     if (_stopped) return;
     if (!_enabled) {
@@ -125,23 +154,56 @@
       }, 500);
       return;
     }
-    var layer = ensureLayer();
-    var base = document.getElementById('aether-wave');
-    if (layer && base) {
-      if (layer.width !== base.clientWidth || layer.height !== base.clientHeight) {
-        layer.width = base.clientWidth || 800;
-        layer.height = base.clientHeight || 120;
-      }
-      var ctx = layer.getContext('2d');
-      ctx.clearRect(0, 0, layer.width, layer.height);
-      drawOverlay(ctx, layer.width, layer.height, performance.now ? performance.now() : Date.now());
-    }
+    frame(performance.now ? performance.now() : Date.now());
     _loopId = requestAnimationFrame(loop);
+  }
+
+  function startLoop() {
+    if (_stopped || _loopActive) return;
+    _loopActive = true;
+    var s = smooth();
+    if (s) {
+      var base = document.getElementById('aether-wave');
+      if (base && typeof s.pauseWhenVisible === 'function') {
+        // Stop drawing when the wave scrolls away — no wasted frames.
+        _visibilityStop = s.pauseWhenVisible(base, frame);
+      } else {
+        _smoothSub = s.subscribe(frame);
+      }
+      return;
+    }
+    _loopTimer = setTimeout(function () {
+      if (_stopped) return;
+      ensureLayer();
+      _loopId = requestAnimationFrame(loop);
+    }, 1000);
+  }
+
+  function stopLoop() {
+    _loopActive = false;
+    var s = smooth();
+    if (_visibilityStop) {
+      try { _visibilityStop(); } catch (e) {}
+      _visibilityStop = null;
+    }
+    if (_smoothSub) {
+      if (s && typeof s.unsubscribe === 'function') s.unsubscribe(_smoothSub);
+      _smoothSub = null;
+    }
+    if (_loopTimer) { clearTimeout(_loopTimer); _loopTimer = null; }
+    if (_loopId) { try { cancelAnimationFrame(_loopId); } catch (e) {} _loopId = null; }
   }
 
   function setEnabled(on) {
     _enabled = !!on;
     document.documentElement.classList.toggle('cognition-theater', _enabled);
+    if (_stopped) return;
+    if (_enabled) {
+      ensureLayer();
+      startLoop();
+    } else {
+      stopLoop();
+    }
   }
 
   function init() {
@@ -150,11 +212,11 @@
     _stopped = false;
     // Beast mode → theater on
     if (g.AETHER_Beast && g.AETHER_Beast.isEnabled && g.AETHER_Beast.isEnabled()) setEnabled(true);
-    _loopTimer = setTimeout(function () {
-      if (_stopped) return;
-      ensureLayer();
-      _loopId = requestAnimationFrame(loop);
-    }, 1000);
+    if (!_enabled && !smooth()) {
+      // Legacy park keeps the layer warm without burning frames; the Smooth
+      // path starts fresh on enable instead of ticking forever while off.
+      startLoop();
+    }
   }
 
   /** Stop every timer/loop and remove the overlay (called when the pack is disabled). */
@@ -162,6 +224,7 @@
     _enabled = false;
     _stopped = true;
     _hooked = false;
+    stopLoop();
     _reasonAmp = 0;
     _toolGlyphs = [];
     if (_decayTimer) clearInterval(_decayTimer);

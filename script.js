@@ -13210,10 +13210,10 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         const ver = (typeof AETHER_VERSION_LABEL !== 'undefined' ? AETHER_VERSION_LABEL : 'v5.16');
         const beast = (typeof AETHER_Beast !== 'undefined' && AETHER_Beast.isEnabled()) ? ' · <span style="color:#ff6600">BEAST MODE</span>' : '';
         const msg = document.createElement('div'); msg.className = 'aether-msg fade-in';
-        msg.innerHTML = `<p><strong>AETHER ${ver}</strong>${beast} — Personal agent OS · Dual Context · Workspace · Skills</p>
-<p><strong>Toolbar:</strong> always-on NEW · STOP · RETRY · CFG &nbsp;·&nbsp; <strong>MODES ▾</strong> for AGENT/CODE/DEEP/WS/BEAST &nbsp;·&nbsp; <strong>MORE ▾</strong> for advanced tools</p>
-<p>Mode: T=${state.temperature} · CoT:${state.coTEnabled?'ON':'OFF'} · RAG:${state.ragEnabled?'ON':'OFF'} · Stream:${state.streamingEnabled?'ON':'OFF'}</p>
-<p>Open <strong>MODES → SETUP</strong> for API/local, <strong>WS</strong> for project memory, <strong>BEAST</strong> for max autonomy.</p>`;
+        msg.innerHTML = `<p><strong>AETHER ${ver}</strong>${beast} · Personal agent OS</p>
+<p><strong>Start here:</strong> MODES → SETUP — pick a model or local endpoint.</p>
+<p><strong>Modes:</strong> AGENT · CODE · DEEP · WS · BEAST &nbsp;·&nbsp; <strong>MORE</strong> for advanced tools.</p>
+<p>T=${state.temperature} · CoT:${state.coTEnabled?'ON':'OFF'} · RAG:${state.ragEnabled?'ON':'OFF'} · Stream:${state.streamingEnabled?'ON':'OFF'}</p>`;
         display.appendChild(msg);
     }
     function addUserMessage(content, save=true) {
@@ -21388,22 +21388,32 @@ Format the final summary as a single, clean text block divided into the five lab
     console.log('%c ⬡ AETHER ' + _ver + ' AETHER CODE PRO ONLINE ', 'background:#9b59b6;color:#fff;font-weight:bold;font-size:12px;padding:4px 8px;border-radius:3px;font-family:monospace');
     console.log('%c Ship · Moat · Markdown · Skills: ' + Object.keys(AETHER_SKILLS).length + ' · lazy CDN', 'color:#00f3ff;font-family:monospace');
     try {
-        if (typeof AETHER_Moat !== 'undefined') {
-            AETHER_Moat.installHooks();
-            var _ms = AETHER_Moat.computeScore();
-            console.log('%c Moat integrity ' + _ms.overall + '/100 grade ' + _ms.grade, 'color:#9b94e8;font-family:monospace');
-        }
+        if (typeof AETHER_Moat !== 'undefined') AETHER_Moat.installHooks();
         if (typeof AETHER_Markdown !== 'undefined') {
             try { AETHER_Markdown.configure(getMarkdownHost()); } catch (_) {}
-            var _md = AETHER_Markdown.runGoldenFixtures ? AETHER_Markdown.runGoldenFixtures() : null;
-            if (_md) console.log('%c Markdown fixtures ' + _md.passed + '/' + _md.total + (_md.ok ? ' PASS' : ' FAIL'), 'color:' + (_md.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
         }
-        if (typeof AETHER_Ship !== 'undefined') {
-            AETHER_Ship.init();
-            var _g = AETHER_Ship.runGoldenPaths();
-            console.log('%c Golden paths ' + _g.passed + '/' + _g.total + (_g.ok ? ' PASS' : ' FAIL'), 'color:' + (_g.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
-        }
+        if (typeof AETHER_Ship !== 'undefined') AETHER_Ship.init();
     } catch (_) {}
+    // Golden paths / fixtures / moat scoring are dev diagnostics, not boot work.
+    // Opt in with ?diag=1 — normal boots never pay for self-tests.
+    if (/(?:^|[?&])diag=1(?:&|$)/.test(location.search)) {
+        setTimeout(function () {
+            try {
+                if (typeof AETHER_Moat !== 'undefined' && AETHER_Moat.computeScore) {
+                    var _ms = AETHER_Moat.computeScore();
+                    console.log('%c Moat integrity ' + _ms.overall + '/100 grade ' + _ms.grade, 'color:#9b94e8;font-family:monospace');
+                }
+                if (typeof AETHER_Markdown !== 'undefined' && AETHER_Markdown.runGoldenFixtures) {
+                    var _md = AETHER_Markdown.runGoldenFixtures();
+                    if (_md) console.log('%c Markdown fixtures ' + _md.passed + '/' + _md.total + (_md.ok ? ' PASS' : ' FAIL'), 'color:' + (_md.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
+                }
+                if (typeof AETHER_Ship !== 'undefined' && AETHER_Ship.runGoldenPaths) {
+                    var _g = AETHER_Ship.runGoldenPaths();
+                    console.log('%c Golden paths ' + _g.passed + '/' + _g.total + (_g.ok ? ' PASS' : ' FAIL'), 'color:' + (_g.ok ? '#1d9e75' : '#e24b4a') + ';font-family:monospace');
+                }
+            } catch (_) {}
+        }, 0);
+    }
     console.log('%c /rag /mcp /tools /code  ·  hybrid BM25+vector · citations ', 'color:#334455;font-family:monospace');
     try {
         if (typeof AETHER_RAGv2 !== 'undefined') {

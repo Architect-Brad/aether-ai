@@ -31,6 +31,33 @@
   var _bound = false;
   var _handlers = []; // tracked so disabling the pack can unbind every listener
   var _ro = null;
+  var _throttledCache = null; // runtime-bound wrappers, reset on destroy
+
+  // Smooth runtime is optional; this pack also stands alone.
+  function smoothRuntime() {
+    return g.AETHER_Smooth || null;
+  }
+
+  /** Defer a one-shot callback to the next frame via the shared ticker. */
+  function nextFrame(cb) {
+    var s = smoothRuntime();
+    if (s && typeof s.throttleToFrame === 'function') {
+      s.throttleToFrame(function () { cb(); })();
+    } else if (g.requestAnimationFrame) {
+      g.requestAnimationFrame(cb);
+    } else {
+      setTimeout(cb, 16);
+    }
+  }
+
+  /** Coalesce rapid event writes into one call per frame. */
+  function throttled(key, fn) {
+    var s = smoothRuntime();
+    if (!s || typeof s.throttleToFrame !== 'function') return fn;
+    if (!_throttledCache) _throttledCache = {};
+    if (!_throttledCache[key]) _throttledCache[key] = s.throttleToFrame(fn);
+    return _throttledCache[key];
+  }
 
   function isNarrow() {
     return typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 820px)').matches;
@@ -137,6 +164,9 @@
   }
 
   function scrollChatToEnd(smooth) {
+    var srt = smoothRuntime();
+    var reduce = srt && typeof srt.motionEnabled === 'function' && !srt.motionEnabled();
+    var behavior = smooth && !reduce ? 'smooth' : 'auto';
     var display =
       document.getElementById('chat-display') ||
       document.getElementById('messages') ||
@@ -156,7 +186,7 @@
     candidates.forEach(function (el) {
       try {
         if (typeof el.scrollTo === 'function') {
-          el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+          el.scrollTo({ top: el.scrollHeight, behavior: behavior });
         } else {
           el.scrollTop = el.scrollHeight;
         }
@@ -166,11 +196,11 @@
     // Force browser layout / address-bar settle on mobile
     try {
       if (_deck && typeof _deck.scrollIntoView === 'function') {
-        _deck.scrollIntoView({ block: 'end', behavior: smooth ? 'smooth' : 'auto' });
+        _deck.scrollIntoView({ block: 'end', behavior: behavior });
       }
       // Nudge window so chrome collapses toward bottom when docking
       if (_mode === 'docked' && window.scrollY > 0) {
-        window.scrollTo({ top: document.body.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+        window.scrollTo({ top: document.body.scrollHeight, behavior: behavior });
       }
     } catch (e2) {}
   }
@@ -199,7 +229,7 @@
 
     if (mode === 'docked') {
       // Snap browser/chat down with the input
-      requestAnimationFrame(function () {
+      nextFrame(function () {
         scrollChatToEnd(!opts.instant);
         setTimeout(function () {
           scrollChatToEnd(false);
@@ -208,7 +238,7 @@
       });
     } else if (!opts.silent) {
       // Raised: keep latest messages visible above the float bar
-      requestAnimationFrame(function () {
+      nextFrame(function () {
         scrollChatToEnd(false);
       });
     }
@@ -236,18 +266,25 @@
     e.preventDefault();
   }
 
+  function applyPreview(delta) {
+    if (_deck) _deck.style.transform = 'translateY(' + delta + 'px)';
+  }
+
   function onPointerMove(e) {
     if (!_dragging) return;
     var y = e.touches ? e.touches[0].clientY : e.clientY;
     _dragDelta = y - _dragStartY;
-    // Live preview translate (capped)
+    // Live preview translate (capped) — one style write per frame, not per event.
     var preview = Math.max(-80, Math.min(80, _dragDelta * 0.35));
-    if (_deck) _deck.style.transform = 'translateY(' + preview + 'px)';
+    throttled('preview', applyPreview)(preview);
   }
 
   function onPointerUp() {
     if (!_dragging) return;
     _dragging = false;
+    // Drop any preview queued for this frame before clearing the transform.
+    var pendingPreview = throttled('preview', applyPreview);
+    if (pendingPreview.cancel) pendingPreview.cancel();
     if (_deck) {
       _deck.classList.remove('is-dragging');
       _deck.style.transform = '';
@@ -264,6 +301,11 @@
     setTimeout(function () {
       _didDragSnap = false;
     }, 50);
+  }
+
+  // Resize / visualViewport can fire in bursts — fold them into one frame.
+  function queueInsets() {
+    throttled('insets', updateViewportInsets)();
   }
 
   function _on(target, type, fn, opts) {
@@ -294,9 +336,9 @@
     _on(_toggle, 'click', function () { toggle(); });
 
     // Keyboard / visual viewport
-    _on(window.visualViewport, 'resize', updateViewportInsets);
-    _on(window.visualViewport, 'scroll', updateViewportInsets);
-    _on(window, 'resize', updateViewportInsets);
+    _on(window.visualViewport, 'resize', queueInsets);
+    _on(window.visualViewport, 'scroll', queueInsets);
+    _on(window, 'resize', queueInsets);
     _on(window, 'orientationchange', function () {
       setTimeout(updateViewportInsets, 200);
     });
@@ -350,6 +392,13 @@
     _bound = false;
     _dragging = false;
     _dragDelta = 0;
+    if (_throttledCache) {
+      Object.keys(_throttledCache).forEach(function (k) {
+        var w = _throttledCache[k];
+        if (w && w.cancel) w.cancel();
+      });
+    }
+    _throttledCache = null;
     document.body.classList.remove('composer-raised', 'composer-docked', 'composer-kb-open');
     if (_deck) _deck.classList.remove('is-raised', 'is-docked', 'is-floating', 'is-dragging');
     if (_spacer) _spacer.style.height = '';

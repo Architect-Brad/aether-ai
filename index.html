@@ -32,7 +32,7 @@
 <head>
     <!-- ═══ META: The boring stuff that makes browsers behave ═══ -->
     <meta charset="UTF-8">
-    <title>AETHER :: NEURAL INTERFACE v5.18 · AETHER CODE</title>
+    <title>AETHER :: NEURAL INTERFACE v5.40 · AETHER CODE</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -57,7 +57,9 @@
     <link rel="manifest" href="manifest.json">
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="style-ivory.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+    <link rel="stylesheet" href="style-mobile.css">
+    <link rel="stylesheet" href="style-motion.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous" media="print" onload="this.media='all'">
     <!-- KaTeX loads only in standards mode to prevent quirks-mode warning in WebViews -->
     <script>
     if (document.compatMode === 'CSS1Compat') {
@@ -223,7 +225,7 @@
             <div class="logo-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
         </div>
         <h1 class="splash-title">AETHER</h1>
-        <div class="splash-subtitle">NEURAL INTERFACE v5.16 · BEAST MODE</div>
+        <div class="splash-subtitle">NEURAL INTERFACE v5.40&nbsp;·&nbsp;BEAST MODE</div>
         <div class="splash-loading">
             <div class="loading-bar"><div class="loading-progress" id="splash-progress"></div></div>
             <div class="loading-text" id="splash-text">INITIALIZING NEURAL CORE...</div>
@@ -1371,58 +1373,77 @@
   run entirely in a browser with zero backend.
   ═══════════════════════════════════════════════════════════ -->
 <!-- Core modules (zero-build ES-free globals — load before / after script.js) -->
-<script src="core/version.js"></script>
-<script src="core/utils.js"></script>
-<script src="core/safe-math.js"></script>
-<script src="core/aether-lazy-cdn.js"></script>
-<script src="core/capabilities.js"></script>
-<script src="core/beast-mode.js"></script>
-<script src="core/pack-loader.js"></script>
-<script>if (window.AETHER_Packs) window.AETHER_Packs.autoLoad();</script>
-<script src="core/skill-utils.js"></script>
-<script src="core/aether-skills-pack.js"></script>
-<script src="core/aether-skill-runtime.js"></script>
-<script src="core/aether-deep-research.js"></script>
-<script src="core/vendor-loader.js"></script>
+<script defer src="core/version.js"></script>
+<script defer src="core/utils.js"></script>
+<script defer src="core/safe-math.js"></script>
+<script defer src="core/aether-lazy-cdn.js"></script>
+<script defer src="core/capabilities.js"></script>
+<script defer src="core/beast-mode.js"></script>
+<script defer src="core/smooth-runtime.js"></script>
+<script defer src="core/pack-loader.js"></script>
+<script>document.addEventListener('DOMContentLoaded', function(){ if (window.AETHER_Packs) window.AETHER_Packs.autoLoad(); });</script>
+<script defer src="core/skill-utils.js"></script>
+<script defer src="core/aether-skills-pack.js"></script>
+<script defer src="core/aether-skill-runtime.js"></script>
+<script defer src="core/aether-deep-research.js"></script>
+<script defer src="core/vendor-loader.js"></script>
 <!-- Advanced Neural OS layer -->
-<script src="core/kernel.js"></script>
-<script src="core/aether-security.js"></script>
-<script src="core/aether-tool-runtime.js"></script>
-<script src="core/aether-rag-v2.js"></script>
-<script src="core/soul-os.js"></script>
-<script src="core/model-council.js"></script>
-<script src="core/thread-graph.js"></script>
-<script src="core/ghost-commits.js"></script>
-<script src="core/aether-code-pro.js"></script>
-<script src="core/aether-subagents.js"></script>
-<script src="core/aether-changeset.js"></script>
-<script src="core/aether-tool-packs.js"></script>
-<script src="core/aether-mcp-bridge.js"></script>
-<script src="core/aether-git-lite.js"></script>
-<script src="core/aether-code-mobile.js"></script>
-<script src="core/themes.js"></script>
-<script src="core/aether-moat.js"></script>
-<script src="core/aether-ship.js"></script>
-<script src="core/aether-markdown.js"></script>
-<script src="core/aether-visualizer.js"></script>
-<script src="script.js"></script>
-<script src="core/advanced-bridge.js"></script>
+<script defer src="core/kernel.js"></script>
+<script defer src="core/aether-security.js"></script>
+<script defer src="core/aether-tool-runtime.js"></script>
+<script defer src="core/aether-rag-v2.js"></script>
+<script defer src="core/soul-os.js"></script>
+<script defer src="core/model-council.js"></script>
+<script defer src="core/thread-graph.js"></script>
+<script defer src="core/ghost-commits.js"></script>
+<script defer src="core/aether-code-pro.js"></script>
+<script defer src="core/aether-subagents.js"></script>
+<script defer src="core/aether-changeset.js"></script>
+<script defer src="core/aether-tool-packs.js"></script>
+<script defer src="core/aether-mcp-bridge.js"></script>
+<script defer src="core/aether-git-lite.js"></script>
+<script defer src="core/aether-code-mobile.js"></script>
+<script defer src="core/themes.js"></script>
+<script defer src="core/aether-moat.js"></script>
+<script defer src="core/aether-ship.js"></script>
+<script defer src="core/aether-markdown.js"></script>
+<script defer src="core/aether-visualizer.js"></script>
+<script defer src="core/mobile-ui.js"></script>
+<script defer src="script.js"></script>
+<script defer src="core/advanced-bridge.js"></script>
 <script>
     if(window.mermaid && mermaid.initialize) mermaid.initialize({startOnLoad:false,theme:'dark',themeVariables:{primaryColor:'#00f3ff',primaryTextColor:'#fff',primaryBorderColor:'#00f3ff',lineColor:'#00f3ff',background:'#0a0a0a',mainBkg:'#0a0a0a',textColor:'#e0e0e0',fontSize:'14px'}});
     (function(){
-        // Sync version labels from single source
-        if (window.AETHER_VERSION_LABEL) {
+        // Version labels sync after deferred modules have executed.
+        document.addEventListener('DOMContentLoaded', function () {
+            if (!window.AETHER_VERSION_LABEL) return;
             var sv = document.getElementById('status-version-label');
             if (sv) sv.textContent = window.AETHER_VERSION_LABEL + ' BEAST';
             var ap = document.getElementById('ap-sub-text');
             if (ap) ap.textContent = 'Neural Interface ' + window.AETHER_VERSION_LABEL + ' · Beast Mode';
             var sub = document.querySelector('.splash-subtitle');
-            if (sub) sub.textContent = 'NEURAL INTERFACE ' + window.AETHER_VERSION_LABEL + ' · BEAST MODE';
+            if (sub) sub.textContent = 'NEURAL INTERFACE ' + window.AETHER_VERSION_LABEL + '\u00A0·\u00A0BEAST MODE';
+        });
+        var s=document.getElementById('splash-screen'),m=document.getElementById('main-app'),p=document.getElementById('splash-progress'),t=document.getElementById('splash-text');
+        if (!s || !m) return;
+        var revealed = false;
+        function reveal(){
+            if (revealed) return;
+            revealed = true;
+            if (p) p.style.width = '100%';
+            if (t) t.textContent = 'SYSTEM ONLINE';
+            s.style.opacity = '0';
+            setTimeout(function(){
+                s.style.display = 'none';
+                m.style.display = 'flex';
+                m.style.opacity = '1';
+                if (window.AETHER_showCapabilityBanner) window.AETHER_showCapabilityBanner(600);
+            }, 180);
         }
-        const s=document.getElementById('splash-screen'),m=document.getElementById('main-app'),p=document.getElementById('splash-progress'),t=document.getElementById('splash-text');
-        const steps=[{p:15,t:'LOADING NEURAL CORE...'},{p:30,t:'INITIALIZING VECTOR ENGINE...'},{p:50,t:'CONFIGURING OCR...'},{p:70,t:'LOADING MATH LIBRARIES...'},{p:85,t:'ARMING BEAST MODE...'},{p:100,t:'SYSTEM ONLINE'}];
-        let i=0;function next(){if(i<steps.length){p.style.width=steps[i].p+'%';t.textContent=steps[i].t;i++;setTimeout(next,350);}else{setTimeout(()=>{s.style.opacity='0';setTimeout(()=>{s.style.display='none';m.style.display='flex';m.style.opacity='0';setTimeout(()=>{m.style.transition='opacity 0.5s';m.style.opacity='1';if(window.AETHER_showCapabilityBanner)AETHER_showCapabilityBanner(600);},50);},500);},300);}}
-        window.addEventListener('load',()=>setTimeout(next,400));
+        // Reveal as soon as parsing + deferred scripts are done. A hard cap
+        // guarantees a slow third-party asset can never strand the splash.
+        document.addEventListener('DOMContentLoaded', function(){ requestAnimationFrame(reveal); });
+        setTimeout(reveal, 1500);
         // MODES + MORE collapsible toolbars (persist preference)
         document.addEventListener('DOMContentLoaded', function(){
             function wireToggle(btnId, panelId, openLabel, closedLabel, storageKey, defaultOpen) {
@@ -1488,7 +1509,7 @@ if (urlParams.get('action') === 'new') {
 <div id="aether-dialog-overlay" class="aether-dialog-overlay" style="display:none"></div>
 
 <!-- ═══════════════════════════════════════════════════════════
-  END OF AETHER NEURAL INTERFACE v5.16 — BEAST MODE
+  END OF AETHER NEURAL INTERFACE v5.40 — BEAST MODE
   If you've read this far in the source code, you're either:
   a) A contributor trying to understand the architecture
   b) A competitor trying to figure out how we did it
