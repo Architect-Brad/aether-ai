@@ -371,10 +371,6 @@
     if (g.AETHER_Changeset && typeof g.AETHER_Changeset.createFromGhosts === 'function') {
       return { ok: true, result: g.AETHER_Changeset.createFromGhosts() };
     }
-    if (g.AETHER_CodePro && typeof g.AETHER_CodePro.openPRPanel === 'function') {
-      g.AETHER_CodePro.openPRPanel();
-      return { ok: true, mode: 'panel' };
-    }
     // slash-style notify
     if (typeof g.showNotification === 'function') {
       g.showNotification('Open /pr to group Ghost commits into a change set', 'info');

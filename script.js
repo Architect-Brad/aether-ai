@@ -382,6 +382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         rateLimitMs: 800,
         encryptionKey: null,
         passwordVerified: false,
+        encryptKeys: true, // onboarding opt-out — gates at-rest key encryption
         encryptionPassphrase: null, // session-only; never persisted
         oramaDb: null,
         vectorRagEnabled: false,
@@ -881,7 +882,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function saveApiConfig() {
         const ps = document.getElementById('provider-select');
         const cfg = { provider:ps?.value||'local', endpoint:endpointInput.value, apiKey:apiKeyInput.value, authHeader:authHeaderInput.value, model:modelInput.value };
-        if (state.passwordVerified && state.encryptionPassphrase) {
+        if (state.encryptKeys !== false && state.passwordVerified && state.encryptionPassphrase) {
             const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
         } else {
@@ -1065,7 +1066,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             sttLanguage:g('stt-language','en-US'),
         };
         // Encrypt at rest when a session passphrase is active (AES-256-GCM via WebCrypto)
-        if (state.passwordVerified && state.encryptionPassphrase) {
+        if (state.encryptKeys !== false && state.passwordVerified && state.encryptionPassphrase) {
             const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
             localStorage.setItem(HOOKS_KEY, JSON.stringify(blob));
         } else {
@@ -7030,6 +7031,16 @@ window.bgAddTask = () => showAetherDialog({
             showNotification('Browser Agent not configured. See HOOKS → Browser Automation.','warn');
             return null;
         }
+        // This request carries the API key — never send it to a tampered or
+        // remote URL. The browser agent bridge is localhost by design.
+        if (typeof AETHER_Security !== 'undefined' && AETHER_Security.validateUrl) {
+            const check = AETHER_Security.validateUrl(browserAgentConfig.url, { localhostOnly: true });
+            if (!check.ok) {
+                agentDone();
+                showNotification('Browser Agent blocked: ' + check.error, 'warn');
+                return null;
+            }
+        }
         agentStatus('generic', `🌐 ${engine}: ${task.slice(0,40)}…`);
         try {
             const res = await fetch(`${browserAgentConfig.url}/run`, {
@@ -9687,7 +9698,8 @@ Deliver maximum value per token. Logic governs all output.
     }
 
     function saveProjects(projects) {
-        localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+        try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects)); }
+        catch (e) { showNotification('Projects too large to save locally — storage quota reached', 'warn'); }
         // Cloud sync when signed in
         if (typeof window._syncProjectsToCloud === 'function') window._syncProjectsToCloud().catch(()=>{});
     }
@@ -13717,7 +13729,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                     showThoughts:state.showThoughts, ragEnabled:state.ragEnabled,
                     streamingEnabled:state.streamingEnabled, blurInEnabled:state.blurInEnabled,
                     vectorRagEnabled:state.vectorRagEnabled,
-                    showMetrics:state.showMetrics, deepResearchSettings:state.deepResearchSettings,
+                    showMetrics:state.showMetrics, deepResearch:state.deepResearch, deepResearchSettings:state.deepResearchSettings,
                     codingMode:state.codingMode,
                     groqReasoningEffort:state.groqReasoningEffort,
                     groqWebSearch:state.groqWebSearch,
@@ -16953,9 +16965,11 @@ Produce ONLY a valid JSON object with these exact keys (no markdown, no explanat
     const MSG_KEY = 'aether_agent_messages';
     function agentSendMessage(arg) {
         const parts = arg.split('|'); const [to, msg] = parts;
-        const msgs = JSON.parse(localStorage.getItem(MSG_KEY)||'[]');
+        let msgs = [];
+        try { msgs = JSON.parse(localStorage.getItem(MSG_KEY)||'[]') || []; } catch (_) {}
         msgs.push({ to: to.trim(), from: 'aether', msg: msg.trim(), ts: Date.now(), read: false });
-        localStorage.setItem(MSG_KEY, JSON.stringify(msgs.slice(-50)));
+        try { localStorage.setItem(MSG_KEY, JSON.stringify(msgs.slice(-50))); }
+        catch (e) { return '⚠ Message could not be queued — local storage is full'; }
         return '✓ Message queued for: ' + to.trim();
     }
 
@@ -21051,6 +21065,7 @@ Format the final summary as a single, clean text block divided into the five lab
             state.coTEnabled = f.cot;
             state.streamingEnabled = f.stream;
             state.deepResearch = f.research;
+            state.encryptKeys = f.encrypt !== false;
             if (f.tts) { ttsConfig.engine = 'browser'; localStorage.setItem(TTS_KEY, JSON.stringify(ttsConfig)); updateTTSIndicator(); }
             saveState();
         }

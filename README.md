@@ -1,10 +1,10 @@
-# AETHER Neural Interface v5.39 — Viz v2
+# AETHER Neural Interface v5.40 — Hero Path
 
 **Open-source. Local-first. Zero backend.**
 
 Browser-native **neural operating system** with agent tools, CODE/Ghost, RAG, and AetherViz. Zero build step. GPL-3.0.
 
-> *Tool continue · Ghost · `/rag index` · Viz v2 · Composer Float · `/heropath` · `/shipcheck`*
+> *Agent Closure · Tool Runtime v2 · Ghost · `/rag index` · AetherViz v2 · Composer Float · `/heropath` · `/shipcheck`*
 
 ## Quick start
 

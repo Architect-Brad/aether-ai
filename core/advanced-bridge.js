@@ -6,21 +6,11 @@
   'use strict';
 
   var _wired = false;
+  var _agentFlightId = null;
 
   function notify(msg, type) {
     if (typeof g.showNotification === 'function') g.showNotification(msg, type || 'info');
     else console.log('[AETHER]', msg);
-  }
-
-  function waitFor(pred, tries, ms) {
-    return new Promise(function (resolve) {
-      var n = 0;
-      (function tick() {
-        if (pred()) return resolve(true);
-        if (++n >= (tries || 40)) return resolve(false);
-        setTimeout(tick, ms || 150);
-      })();
-    });
   }
 
   async function instrumentTools() {
@@ -94,7 +84,9 @@
       notify('Council offline', 'error');
       return;
     }
-    if (g.AETHER_Kernel) g.AETHER_Kernel.beginFlight({ goal: prompt, kind: 'council' });
+    var councilFlightId = g.AETHER_Kernel
+      ? g.AETHER_Kernel.beginFlight({ goal: prompt, kind: 'council' })
+      : null;
     if (g.AETHER_Theater) g.AETHER_Theater.pulseReasoning();
 
     var callModel = async function (messages) {
@@ -113,10 +105,10 @@
         g.addSystemMessage('## Council Synthesis\n\n' + result.synthesis);
       }
       if (g.AETHER_Theater) g.AETHER_Theater.answerPulse();
-      if (g.AETHER_Kernel) g.AETHER_Kernel.endFlight('landed');
+      if (g.AETHER_Kernel) g.AETHER_Kernel.endFlight('landed', councilFlightId);
       return result;
     } catch (e) {
-      if (g.AETHER_Kernel) g.AETHER_Kernel.endFlight('aborted');
+      if (g.AETHER_Kernel) g.AETHER_Kernel.endFlight('aborted', councilFlightId);
       notify('Council error: ' + e.message, 'error');
     }
   }
@@ -223,11 +215,17 @@
     g.__aetherBeginAgentFlight = function (goal) {
       if (g.AETHER_Kernel) {
         g.AETHER_Kernel.ensurePanel();
-        return g.AETHER_Kernel.beginFlight({ goal: goal, kind: 'agent' });
+        _agentFlightId = g.AETHER_Kernel.beginFlight({ goal: goal, kind: 'agent' });
+        return _agentFlightId;
       }
     };
     g.__aetherEndAgentFlight = function (status) {
-      if (g.AETHER_Kernel) return g.AETHER_Kernel.endFlight(status || 'landed');
+      // script.js can call this twice (done branch + finally); stay idempotent
+      // and always close this agent's own flight, even if a Council flight overlaps.
+      if (_agentFlightId == null) return null;
+      var id = _agentFlightId;
+      _agentFlightId = null;
+      if (g.AETHER_Kernel) return g.AETHER_Kernel.endFlight(status || 'landed', id);
     };
     g.__aetherTrackGraph = function (type, label, meta) {
       if (g.AETHER_ThreadGraph) {

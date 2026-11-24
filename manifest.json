@@ -25,16 +25,6 @@
       "purpose": "maskable"
     }
   ],
-  "screenshots": [
-    {
-      "label": "AETHER — AI interface with Agent Mode and Call Mode",
-      "form_factor": "wide"
-    },
-    {
-      "label": "AETHER — mobile-first AI interface",
-      "form_factor": "narrow"
-    }
-  ],
   "shortcuts": [
     {
       "name": "New Chat",

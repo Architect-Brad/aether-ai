@@ -33,6 +33,7 @@
   var _mem = []; // in-memory cache of chunk records
   var _bm25 = null;
   var _dirty = false;
+  var _writeGen = 0; // bumped on every in-memory write; guards persist() clear
   var _settings = {
     hybrid: true,
     topK: DEFAULT_TOP_K,
@@ -467,15 +468,19 @@
       _mem = _mem.slice(_mem.length - MAX_CHUNKS);
     }
     rebuildBM25();
+    _writeGen++;
     _dirty = true;
     return chunks;
   }
 
   async function persist() {
     if (!_dirty) return;
+    var gen = _writeGen;
     try {
       await idbPutAll(_mem);
-      _dirty = false;
+      // A write may have landed while the IDB transaction was in flight.
+      // Only clear the flag if no newer write bumped the generation.
+      if (gen === _writeGen) _dirty = false;
     } catch (e) {
       // Fallback localStorage sample (last 80 display texts for legacy compat)
       try {

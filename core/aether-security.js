@@ -175,19 +175,60 @@
         error: 'command not in allowlist: ' + prog + ' (allowed: ' + Object.keys(SHELL_ALLOW).join(', ') + ')',
       };
     }
-    // Path args
+    // Path args — validate EVERY token, not just non-option ones.
+    // Option tokens were previously skipped wholesale, which left paths attached
+    // to an option (e.g. --file=~/.env, -o=C:\... ) unchecked by safePath().
     var parts = cmd.split(/\s+/).slice(1);
     for (var j = 0; j < parts.length; j++) {
-      if (parts[j].startsWith('-')) continue;
-      var sp = safePath(parts[j]);
-      if (!sp.ok && parts[j].indexOf('/') !== -1) {
-        return { ok: false, error: 'unsafe path in shell: ' + sp.error };
+      // A token may carry its value inline (--file=..., -o=...). Inspect both the
+      // raw token and the value portion after '=' so neither can hide a path.
+      var candidates = [parts[j]];
+      var eq = parts[j].indexOf('=');
+      if (eq !== -1 && eq < parts[j].length - 1) candidates.push(parts[j].slice(eq + 1));
+      for (var k = 0; k < candidates.length; k++) {
+        var token = candidates[k];
+        var sp = safePath(token);
+        if (
+          !sp.ok &&
+          (token.indexOf('/') !== -1 ||
+            token.indexOf('\\') !== -1 ||
+            /^[a-zA-Z]:[\\/]/.test(token) ||
+            /^~/.test(token))
+        ) {
+          return { ok: false, error: 'unsafe path in shell: ' + sp.error };
+        }
       }
     }
     return { ok: true, command: cmd };
   }
 
   // ─── URLs / SSRF ───────────────────────────────────────────
+
+  /** True for loopback, private, link-local or cloud-metadata targets. */
+  function isBlockedTarget(host) {
+    host = String(host || '').toLowerCase();
+    if (
+      host === 'localhost' ||
+      host === '0.0.0.0' ||
+      host === 'metadata' ||
+      host === 'metadata.google.internal' ||
+      host.endsWith('.local') ||
+      host.endsWith('.localhost') ||
+      host === '[::1]' ||
+      host === '::1'
+    ) {
+      return true;
+    }
+    // IPv4 loopback, private, link-local, CGNAT and metadata ranges
+    if (/^(10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|169\.254\.|100\.64\.)/.test(host)) {
+      return true;
+    }
+    // IPv6 loopback, unique-local and link-local ranges
+    if (/^\[?(::1|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/.test(host)) {
+      return true;
+    }
+    return false;
+  }
 
   function validateUrl(url, opts) {
     opts = opts || {};
@@ -232,15 +273,13 @@
       return { ok: false, error: 'MCP/bridge endpoints must be localhost (got ' + host + ')' };
     }
 
-    // Block obvious private/metadata ranges when blockPrivateHttp
-    if (_sessionFlags.blockPrivateHttp && !isLocal && !opts.allowPrivate) {
-      if (
-        /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|169\.254\.|100\.64\.)/.test(host) ||
-        host === 'metadata.google.internal' ||
-        host.endsWith('.local') ||
-        host === 'metadata'
-      ) {
-        return { ok: false, error: 'private/metadata host blocked (SSRF guard): ' + host };
+    // SSRF guard: block private / loopback / cloud-metadata targets by default.
+    // Loopback is private too — otherwise a model could use scrape/crawl to reach
+    // services on the local machine. Only an explicit per-call opt-in
+    // (allowPrivate or localhostOnly) unlocks these targets.
+    if (_sessionFlags.blockPrivateHttp && !opts.allowPrivate && !opts.localhostOnly) {
+      if (isBlockedTarget(host)) {
+        return { ok: false, error: 'private/local/metadata host blocked (SSRF guard): ' + host };
       }
     }
 

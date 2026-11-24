@@ -9,7 +9,8 @@
   var MAX_FLIGHTS = 40;
   var MAX_EVENTS = 200;
 
-  var _active = null; // current flight
+  var _stack = []; // active flights, in begin order; last entry is current
+  var _active = null; // current (topmost) flight — kept for callers / single-flight behaviour
   var _panel = null;
   var _listeners = [];
 
@@ -39,7 +40,7 @@
 
   function beginFlight(meta) {
     meta = meta || {};
-    _active = {
+    var flight = {
       id: AETHER_Utils.uid('flight'),
       goal: meta.goal || 'session',
       kind: meta.kind || 'agent',
@@ -49,22 +50,41 @@
       events: [],
       stats: { read: 0, write: 0, exec: 0, net: 0, sense: 0, call: 0, errors: 0 },
     };
-    log('KERNEL', 'Flight ' + _active.id + ' armed — ' + (_active.goal || '').slice(0, 80), 'kernel');
-    emit('begin', _active);
+    _stack.push(flight);
+    _active = flight;
+    log('KERNEL', 'Flight ' + flight.id + ' armed — ' + (flight.goal || '').slice(0, 80), 'kernel');
+    emit('begin', flight);
     renderPanel();
-    return _active.id;
+    return flight.id;
   }
 
-  function endFlight(status) {
-    if (!_active) return null;
-    _active.status = status || 'landed';
-    _active.endedAt = Date.now();
-    log('KERNEL', 'Flight ' + _active.status + ' · ' + _active.events.length + ' events · ' + durationStr(_active), 'kernel');
+  /**
+   * End a flight. Pass the id returned by beginFlight() to close a specific
+   * flight when several overlap; otherwise the most-recent flight is closed
+   * (LIFO), which preserves the original single-flight behaviour.
+   */
+  function endFlight(status, id) {
+    var done = null;
+    if (id != null) {
+      for (var i = _stack.length - 1; i >= 0; i--) {
+        if (_stack[i].id === id) { done = _stack.splice(i, 1)[0]; break; }
+      }
+      if (!done) return null; // already ended / unknown id — idempotent
+    } else {
+      if (!_stack.length) return null;
+      done = _stack.pop();
+    }
+    // Current flight becomes the next one down the stack (or none).
+    var prev = _stack.length ? _stack[_stack.length - 1] : null;
+    done.status = status || 'landed';
+    done.endedAt = Date.now();
+    // Route the closing log line into the flight being ended, not the next active one.
+    _active = done;
+    log('KERNEL', 'Flight ' + done.status + ' · ' + done.events.length + ' events · ' + durationStr(done), 'kernel');
+    _active = prev;
     var list = loadFlights();
-    list.unshift(JSON.parse(JSON.stringify(_active)));
+    list.unshift(JSON.parse(JSON.stringify(done)));
     saveFlights(list);
-    var done = _active;
-    _active = null;
     emit('end', done);
     renderPanel();
     return done;
@@ -280,6 +300,7 @@
     openTimelineModal: openTimelineModal,
     exportActive: exportActive,
     loadFlights: loadFlights,
+    getHistory: loadFlights, // alias used by Moat trust-pack export
     getActive: function () { return _active; },
     classify: classify,
   };

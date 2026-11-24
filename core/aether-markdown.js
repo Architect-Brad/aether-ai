@@ -44,10 +44,19 @@
   function safeHref(url) {
     var u = String(url || '').trim();
     if (!u) return '#';
-    // block javascript:, data:text/html, vbscript:
-    if (/^\s*(javascript|vbscript|data\s*:\s*text\/html)/i.test(u)) return '#';
-    // allow http(s), mailto, tel, #anchors, relative paths
-    if (/^(https?:|mailto:|tel:|#|\/|\.\/|\.\.\/|[a-z0-9_./-])/i.test(u)) return u;
+    // Browsers strip control characters while parsing URLs, so
+    // "java\nscript:..." becomes executable javascript:. Reject outright
+    // rather than trying to normalize the decoded form.
+    if (/[\u0000-\u001F\u007F]/.test(u)) return '#';
+    // Explicit scheme allowlist. Anything with a scheme prefix not in this list
+    // (data:, file:, blob:, javascript:, vbscript:, ftp:, custom-app:, ...) is
+    // rejected — never infer "safe" from a leading letter/digit character class.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(u)) {
+      return /^(https?|mailto|tel):/i.test(u) ? u : '#';
+    }
+    // No scheme: allow anchors and relative paths only.
+    if (/^(#|\/|\.\/|\.\.\/)/.test(u)) return u;
+    if (/^[a-z0-9_.\/-]/i.test(u)) return u;
     return '#';
   }
 

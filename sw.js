@@ -1,11 +1,13 @@
 // AETHER Neural Interface — Service Worker v5.40 · GPL-3.0 · Hero Path
-const CACHE_VERSION='aether-v5.40.3',STATIC_CACHE=`${CACHE_VERSION}-static`,CDN_CACHE=`${CACHE_VERSION}-cdn`,DYNAMIC_CACHE=`${CACHE_VERSION}-dynamic`;
+const CACHE_VERSION='aether-v5.40.4',STATIC_CACHE=`${CACHE_VERSION}-static`,CDN_CACHE=`${CACHE_VERSION}-cdn`,DYNAMIC_CACHE=`${CACHE_VERSION}-dynamic`;
 const CORE_ASSETS=[
   './','./index.html','./script.js','./style.css','./style-ivory.css','./style-mobile.css','./style-motion.css','./manifest.json','./logo.svg',
   './core/version.js','./core/utils.js','./core/pack-loader.js','./core/smooth-runtime.js','./core/mobile-ui.js','./core/safe-math.js','./core/aether-lazy-cdn.js','./core/capabilities.js','./core/beast-mode.js','./core/skill-utils.js','./core/aether-skills-pack.js','./core/aether-skill-runtime.js','./core/aether-deep-research.js','./core/vendor-loader.js',
   './core/kernel.js','./core/aether-security.js','./core/aether-tool-runtime.js','./core/aether-rag-v2.js','./core/soul-os.js','./core/model-council.js','./core/thread-graph.js',
   './core/ghost-commits.js','./core/aether-code-pro.js','./core/aether-subagents.js','./core/aether-changeset.js','./core/aether-tool-packs.js',
   './core/aether-mcp-bridge.js','./core/aether-git-lite.js','./core/aether-code-mobile.js','./core/themes.js',
+  // Feature Packs (on-demand) — precached so toggling them works offline again (see core/pack-loader.js).
+  './core/boot-cinematic.js','./core/cognition-theater.js','./core/aether-composer-float.js',
   './core/aether-moat.js','./core/aether-ship.js','./core/aether-markdown.js','./core/aether-visualizer.js','./core/advanced-bridge.js',
   './discovery-skill.js','./documents-supremacy.js','./vendor/README.md'
 ];
@@ -14,7 +16,7 @@ const BYPASS=['api.openai.com','api.anthropic.com','generativelanguage.googleapi
 self.addEventListener('install',e=>{console.log('[AETHER SW] Installing v5.40 Hero Path');e.waitUntil(caches.open(STATIC_CACHE).then(c=>Promise.allSettled(CORE_ASSETS.map(u=>c.add(u).catch(()=>{}))).then(()=>self.skipWaiting())));});
 self.addEventListener('activate',e=>{console.log('[AETHER SW] Activating v5.40');e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k.startsWith('aether-')&&!k.startsWith(CACHE_VERSION)).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',e=>{const{request:req}=e;const url=new URL(req.url);if(req.method!=='GET')return;if(BYPASS.some(d=>url.hostname.includes(d)||req.url.includes(d)))return;if(CDN_DOMAINS.some(d=>url.hostname.includes(d))){e.respondWith(cacheFirst(req,CDN_CACHE));return;}if(url.origin===self.location.origin){const isCode=req.mode==='navigate'||/\.(?:js|html|css|json)$/.test(url.pathname);e.respondWith(isCode?netFirst(req,STATIC_CACHE):swr(req,STATIC_CACHE));return;}e.respondWith(netFirst(req,DYNAMIC_CACHE));});
-async function cacheFirst(req,cn){const c=await caches.match(req);if(c)return c;try{const r=await fetch(req);if(r.ok)(await caches.open(cn)).put(req,r.clone());return r;}catch{return new Response('Offline',{status:503});}}
+async function cacheFirst(req,cn){const c=await (await caches.open(cn)).match(req);if(c)return c;try{const r=await fetch(req);if(r.ok)(await caches.open(cn)).put(req,r.clone());return r;}catch{return new Response('Offline',{status:503});}}
 async function swr(req,cn){const cache=await caches.open(cn);const c=await cache.match(req);const f=fetch(req).then(r=>{if(r.ok)cache.put(req,r.clone());return r;}).catch(()=>null);return c||await f||new Response('Offline',{status:503});}
 async function netFirst(req,cn){try{const r=await fetch(req);if(r.ok)(await caches.open(cn)).put(req,r.clone());return r;}catch{return await caches.match(req)||new Response('Offline',{status:503});}}
 self.addEventListener('push',e=>{const d=e.data?.json()||{};e.waitUntil(self.registration.showNotification(d.title||'⬡ AETHER',{body:d.body||'',icon:'./logo.svg',badge:'./logo.svg',tag:d.tag||'aether',data:d,vibrate:[200,100,200],actions:[{action:'view',title:'View'},{action:'dismiss',title:'Dismiss'}]}));});
