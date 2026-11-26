@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import vm from 'vm';
+import { spawnSync } from 'child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -463,6 +464,23 @@ function main() {
       failures.push('missing ' + f);
       lines.push('  ✗ missing ' + f);
     }
+  }
+
+  // Empty-catch lint — gates the drCallModel / fsGetHandle class of bug:
+  // an undefined call swallowed by a bare catch. Intentional best-effort
+  // catches are fine; only hidden undefined names fail the build.
+  const catchLint = spawnSync(process.execPath, [path.join(__dirname, 'lint-catches.mjs')], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  });
+  const catchOut = ((catchLint.stdout || '') + (catchLint.stderr || ''))
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+  lines.push('empty_catch_lint: ' + (catchLint.status === 0 ? 'PASS' : 'FAIL'));
+  if (catchLint.status !== 0) {
+    failures.push('empty_catch_lint');
+    catchOut.forEach((l) => lines.push('  ' + l));
   }
 
   console.log('⬡ AETHER shipcheck\n');

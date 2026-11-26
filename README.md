@@ -87,8 +87,10 @@ aether-ai/
 ## Smoke / CI
 
 ```bash
-# Headless
+# Headless (includes the empty-catch lint — catches undefined calls
+# swallowed by bare catch blocks, e.g. the old drCallModel / fsGetHandle bugs)
 node scripts/shipcheck.mjs
+node scripts/lint-catches.mjs   # standalone, same gate
 
 # Browser
 python3 -m http.server 3000
