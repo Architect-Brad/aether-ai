@@ -277,11 +277,19 @@
       renderPatchList(m.querySelector('#so-patches'));
     };
     m.querySelector('#so-export').onclick = function () {
-      var blob = new Blob([JSON.stringify({ soul: loadSoul(), patches: loadPatches() }, null, 2)], { type: 'application/json' });
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'aether-soul.json';
-      a.click();
+      try {
+        if (typeof Blob === 'undefined' || !URL || typeof URL.createObjectURL !== 'function') {
+          throw new Error('Blob download unavailable');
+        }
+        var blob = new Blob([JSON.stringify({ soul: loadSoul(), patches: loadPatches() }, null, 2)], { type: 'application/json' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'aether-soul.json';
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      } catch (e) {
+        if (g.showNotification) g.showNotification('Export unavailable on this browser', 'warn');
+      }
     };
     m.querySelector('#so-whoami').onclick = function () {
       if (typeof g.addSystemMessage === 'function') g.addSystemMessage(whoamiMarkdown());

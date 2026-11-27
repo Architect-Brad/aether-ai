@@ -1,0 +1,140 @@
+/**
+ * AETHER — RENDERING RESILIENCE
+ * -----------------------------
+ * Additive-only performance layer. Load LAST among the AETHER stylesheets,
+ * immediately after style-anim.css. See RESILIENCE_NOTES.md for the exact
+ * <link> tag and the reasoning behind every selector.
+ *
+ * House rules honoured here:
+ *   - no !important anywhere;
+ *   - no prefers-reduced-motion block (style-motion.css owns it);
+ *   - no visual-identity changes (colour, type, spacing, glass are intact);
+ *   - every selector is scoped to an element that may be absent, so pages
+ *     without these components pay nothing.
+ */
+
+/* ── 1. OFFSCREEN SKIPPING ──────────────────────────────────────────────────
+   content-visibility: auto lets the engine skip layout/paint for rows that
+   are far from the viewport. It implies layout, style and paint containment
+   plus (while skipped) size containment, so contain-intrinsic-size supplies
+   a conservative placeholder.
+   The inline axis is deliberately `none`: messages and cards are flex/grid
+   children whose width must keep following the existing layout. Only the
+   block axis gets a fixed estimate. The second declaration upgrades to the
+   remembered real size once a row has been painted; older WebViews simply
+   ignore it and keep the first (plain) value. */
+
+.conversation-item {
+  content-visibility: auto;
+  contain-intrinsic-size: none 56px;
+  contain-intrinsic-size: auto none auto 56px;
+}
+
+.aether-msg,
+.user-msg {
+  content-visibility: auto;
+  contain-intrinsic-size: none 96px;
+  contain-intrinsic-size: auto none auto 96px;
+}
+
+/* Tool-result bubbles are also .aether-msg; this later, equal-specificity
+   rule replaces their generic 96px placeholder with a taller one. */
+.tool-result-msg,
+.code-tool-inline {
+  content-visibility: auto;
+  contain-intrinsic-size: none 140px;
+  contain-intrinsic-size: auto none auto 140px;
+}
+
+.code-tool-card {
+  content-visibility: auto;
+  contain-intrinsic-size: none 64px;
+  contain-intrinsic-size: auto none auto 64px;
+}
+
+.kernel-timeline {
+  content-visibility: auto;
+  contain-intrinsic-size: none 120px;
+  contain-intrinsic-size: auto none auto 120px;
+}
+
+.skill-card {
+  content-visibility: auto;
+  contain-intrinsic-size: none 160px;
+  contain-intrinsic-size: auto none auto 160px;
+}
+
+/* ── 2. PANEL ISOLATION ─────────────────────────────────────────────────────
+   layout + paint + style only. NEVER `contain: size` here: these panels must
+   keep sizing from their content. Escaping UI was checked in the markup:
+   the attach menu, the input "+" menu, the sidebar reopen badge and native
+   <select>/title popups are outside these boxes (or OS-rendered), so paint
+   containment does not cut them off. */
+
+.sidebar,
+.console-output,
+.kernel-panel,
+.modal-overlay,
+.adv-modal-overlay {
+  contain: layout paint style;
+}
+
+/* ── 3. LOW-END PHONES ──────────────────────────────────────────────────────
+   Four scoped groups. The blur variables stay non-zero: the glass aesthetic
+   remains, it just costs less. These variable overrides win over the 820px
+   block in style-anim.css because this sheet loads later. */
+
+@media (max-width: 480px) {
+  :root {
+    --glass-blur: blur(6px) saturate(1.2);
+    --glass-blur-sm: blur(4px) saturate(1.15);
+  }
+
+  .aether-msg,
+  .user-msg {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);
+  }
+
+  .sidebar,
+  .kernel-panel {
+    box-shadow: none;
+  }
+
+  .cmd-btn,
+  #user-input {
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+}
+
+/* ── 4. REDUCED DATA (progressive enhancement) ──────────────────────────────
+   Engines that do not know this media feature ignore the whole block.
+   Variable-driven glass (modals, .glass, bubbles, cards) is handled by the
+   :root override; the list below covers hard-coded, non-!important blurs.
+   Translucent backgrounds are kept, so panels still read as glass. */
+
+@media (prefers-reduced-data: reduce) {
+  :root {
+    --glass-blur: none;
+    --glass-blur-sm: none;
+  }
+
+  .user-msg,
+  .cmd-btn,
+  .ac-plan-block,
+  .ac-todo-block,
+  .coding-block,
+  .code-block.modern-code,
+  .input-row-v2,
+  .input-plus-menu,
+  .settings-section,
+  .call-overlay,
+  .init-wizard-modal,
+  .call-ui,
+  .onboarding-overlay,
+  .input-deck.is-raised,
+  body.composer-raised .input-deck {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

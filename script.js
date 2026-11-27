@@ -32,6 +32,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     // against humanity. jQuery who? We don't need your 30KB library.
     const $ = id => document.getElementById(id);
 
+    // Feature-detected wrappers: a missing browser API must produce a clear
+    // error (caught by the surrounding flow), never a TypeError that leaves
+    // a state flag stuck and the UI unresponsive.
+    function getUserMediaSafe(constraints) {
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+            return Promise.reject(new Error('Microphone API unavailable in this browser'));
+        }
+        return navigator.mediaDevices.getUserMedia(constraints);
+    }
+    const hasWebCrypto = () => !!(typeof crypto !== 'undefined' && crypto && crypto.subtle);
+
     // ─── GLOBAL ERROR BOUNDARY ───────────────────────────────
     window.onerror = function (msg, src, line, col, err) {
         try {
@@ -56,6 +67,22 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         } catch (_) {}
     });
+
+    // Watchdog: a model call that never settles leaves the chat permanently
+    // "generating", which blocks every further message. Sweep stale flags.
+    setInterval(function () {
+        try {
+            if (typeof state === 'undefined' || !state.processingConversations) return;
+            var now = Date.now();
+            Object.keys(state.processingConversations).forEach(function (id) {
+                var entry = state.processingConversations[id];
+                if (!entry || !entry.startedAt || now - entry.startedAt < 180000) return;
+                try { if (entry.abortController) entry.abortController.abort(); } catch (_) {}
+                delete state.processingConversations[id];
+                showNotification('A response timed out — ready again', 'warn');
+            });
+        } catch (_) {}
+    }, 30000);
 
     // ═══════════════════════════════════════════════════════════
     // SECTION 1: DOM REFERENCES
@@ -675,6 +702,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // API keys while you're in the bathroom.
     // ═══════════════════════════════════════════════════════════
     async function deriveKey(password, salt) {
+        if (!hasWebCrypto()) throw new Error('WebCrypto unavailable — requires HTTPS or localhost');
         const enc = new TextEncoder();
         const km = await crypto.subtle.importKey('raw', enc.encode(password), {name:'PBKDF2'}, false, ['deriveKey']);
         return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:100000,hash:'SHA-256'}, km, {name:'AES-GCM',length:256}, false, ['encrypt','decrypt']);
@@ -882,7 +910,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function saveApiConfig() {
         const ps = document.getElementById('provider-select');
         const cfg = { provider:ps?.value||'local', endpoint:endpointInput.value, apiKey:apiKeyInput.value, authHeader:authHeaderInput.value, model:modelInput.value };
-        if (state.encryptKeys !== false && state.passwordVerified && state.encryptionPassphrase) {
+        if (state.encryptKeys !== false && hasWebCrypto() && state.passwordVerified && state.encryptionPassphrase) {
             const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(blob));
         } else {
@@ -1066,7 +1094,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             sttLanguage:g('stt-language','en-US'),
         };
         // Encrypt at rest when a session passphrase is active (AES-256-GCM via WebCrypto)
-        if (state.encryptKeys !== false && state.passwordVerified && state.encryptionPassphrase) {
+        if (state.encryptKeys !== false && hasWebCrypto() && state.passwordVerified && state.encryptionPassphrase) {
             const blob = await encryptData(JSON.stringify(cfg), state.encryptionPassphrase);
             localStorage.setItem(HOOKS_KEY, JSON.stringify(blob));
         } else {
@@ -1121,7 +1149,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // "X button doesn't work" bug that plagues every mobile web app.
     // ═══════════════════════════════════════════════════════════
     const device = (() => {
-        const coarse = window.matchMedia('(pointer: coarse)').matches;
+        const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
         const w      = window.innerWidth;
         const isMobile  = coarse && w < 768;
         const isTablet  = coarse && w >= 768 && w < 1100;
@@ -1157,7 +1185,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(resizeTimer);
         resizeTimer = setTimeout(() => {
             const w2 = window.innerWidth;
-            const coarse2 = window.matchMedia('(pointer: coarse)').matches;
+            const coarse2 = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
             device.w = w2; device.coarse = coarse2;
             device.isMobile  = coarse2 && w2 < 768;
             device.isTablet  = coarse2 && w2 >= 768 && w2 < 1100;
@@ -1414,7 +1442,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         // Mic recording for API-based engines
         try {
-            sttStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+            sttStream = await getUserMediaSafe({ audio:true });
             sttChunks = [];
             sttMediaRecorder = new MediaRecorder(sttStream, { mimeType: 'audio/webm' });
             sttMediaRecorder.ondataavailable = e => { if(e.data.size>0) sttChunks.push(e.data); };
@@ -7541,7 +7569,7 @@ window.bgAddTask = () => showAetherDialog({
         }
         const pipe = await initWhisperJS();
         if (!pipe) return;
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await getUserMediaSafe({ audio: true });
         wjsChunks = [];
         mediaRecorderWjs = new MediaRecorder(stream);
         mediaRecorderWjs.ondataavailable = e => wjsChunks.push(e.data);
@@ -7729,7 +7757,7 @@ window.bgAddTask = () => showAetherDialog({
     // ── Audio pipeline: stream → analyser → mediaRecorder ──
     async function callInitAudio() {
         try {
-            callStream = await navigator.mediaDevices.getUserMedia({
+            callStream = await getUserMediaSafe({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
@@ -8441,6 +8469,10 @@ window.bgAddTask = () => showAetherDialog({
 
         const speak = () => {
             if (!callActive) { safeEnd(); return; }
+            if (typeof SpeechSynthesisUtterance === 'undefined' || typeof speechSynthesis === 'undefined') {
+                showNotification('Speech synthesis not supported in this browser', 'warn');
+                safeEnd(); return;
+            }
             const utt = new SpeechSynthesisUtterance(clean);
             utt.rate = 0.9; utt.pitch = 1.0; utt.volume = 1.0;
             const savedVoice = localStorage.getItem('aether_call_voice') || '';
@@ -13879,14 +13911,32 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
     }
 
     let _saveConvTimer = null;
+    // Bound persisted history so serialization + IndexedDB writes stay cheap
+    // on slow machines. The first message pins the original goal; the rest is
+    // a trailing window. Live context compaction still handles long sessions.
+    const MAX_PERSISTED_MESSAGES = 400;
     async function saveConversations() {
         // Coalesce rapid saves — wait 100ms before writing to IndexedDB
         if (_saveConvTimer) clearTimeout(_saveConvTimer);
         return new Promise(resolve => {
             _saveConvTimer = setTimeout(async () => {
                 _saveConvTimer = null;
-                await localforage.setItem('conversations', state.conversations);
-                resolve();
+                try {
+                    for (const c of Object.values(state.conversations)) {
+                        const m = c && c.messages;
+                        if (Array.isArray(m) && m.length > MAX_PERSISTED_MESSAGES) {
+                            c.messages = [m[0], ...m.slice(-(MAX_PERSISTED_MESSAGES - 1))];
+                        }
+                    }
+                    await localforage.setItem('conversations', state.conversations);
+                } catch (e) {
+                    // A rejected promise inside this timer left every caller
+                    // awaiting saveConversations() hanging forever.
+                    console.warn('[AETHER] conversation save failed:', e && e.message ? e.message : e);
+                    showNotification('Conversation could not be saved locally', 'warn');
+                } finally {
+                    resolve();
+                }
             }, 100);
         });
     }
@@ -15143,7 +15193,7 @@ ${result}`));
         }
 
         const abortController=new AbortController();
-        state.processingConversations[convId]={abortController};
+        state.processingConversations[convId]={ abortController, startedAt: Date.now() };
         updateDualChatUI();
 
         let finalMessage=finalRawMsg;
@@ -21201,6 +21251,7 @@ Format the final summary as a single, clean text block divided into the five lab
     try { const s = localStorage.getItem(AUTH_KEY); if (s) authConfig = JSON.parse(s); } catch(e) {}
 
     async function sha256(str) {
+        if (!hasWebCrypto()) throw new Error('WebCrypto unavailable — requires HTTPS or localhost');
         const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
         return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
     }

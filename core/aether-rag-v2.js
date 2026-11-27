@@ -21,6 +21,10 @@
   var VEC_DIM = 384;
   var DEFAULT_TOP_K = 6;
   var RRF_K = 60;
+  // Bound every IDB request: a blocked upgrade or a transaction that never
+  // completes fires neither onerror nor onsuccess, which would otherwise
+  // leave ready() (and every awaiter) pending forever on constrained browsers.
+  var IDB_TIMEOUT_MS = 3000;
 
   var STOPWORDS = {
     a: 1, an: 1, and: 1, are: 1, as: 1, at: 1, be: 1, but: 1, by: 1, for: 1,
@@ -290,13 +294,51 @@
 
   // ─── IndexedDB ─────────────────────────────────────────────
 
-  function openDB() {
+  /** Reject with `message` if `p` has not settled within `ms`. */
+  function withIDBTimeout(p, ms, message) {
     return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error(message));
+      }, ms);
+      Promise.resolve(p).then(
+        function (v) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        },
+        function (e) {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(e);
+        }
+      );
+    });
+  }
+
+  function closeDB(db) {
+    try {
+      if (db) db.close();
+    } catch (e) {}
+  }
+
+  function openDB() {
+    var inner = new Promise(function (resolve, reject) {
       if (typeof indexedDB === 'undefined') {
         reject(new Error('IndexedDB unavailable'));
         return;
       }
-      var req = indexedDB.open(IDB_NAME, IDB_VER);
+      var req;
+      try {
+        req = indexedDB.open(IDB_NAME, IDB_VER);
+      } catch (e) {
+        reject(e);
+        return;
+      }
       req.onupgradeneeded = function () {
         var db = req.result;
         if (!db.objectStoreNames.contains(STORE)) {
@@ -311,71 +353,99 @@
       req.onerror = function () {
         reject(req.error || new Error('IDB open failed'));
       };
+      // Another tab holding an older version can block the upgrade forever.
+      req.onblocked = function () {
+        reject(new Error('IDB open blocked'));
+      };
+    });
+    return withIDBTimeout(inner, IDB_TIMEOUT_MS, 'IDB open timed out').catch(function (e) {
+      // Close a connection that opens after we gave up instead of leaking it.
+      inner.then(closeDB).catch(function () {});
+      throw e;
+    });
+  }
+
+  /** Run one bounded transaction on a fresh connection; always close the DB. */
+  function idbTx(mode, setup) {
+    return openDB().then(function (db) {
+      var p = new Promise(function (resolve, reject) {
+        try {
+          var tx = db.transaction(STORE, mode);
+          // Each caller sets oncomplete: read must resolve with the request
+          // result, writes/clears resolve with true.
+          tx.onerror = function () {
+            reject(tx.error || new Error('IDB transaction failed'));
+          };
+          // Quota-exceeded / blocked writes often abort without onerror.
+          tx.onabort = function () {
+            reject(tx.error || new Error('IDB transaction aborted'));
+          };
+          setup(tx.objectStore(STORE), tx, resolve, reject);
+        } catch (e) {
+          reject(e);
+        }
+      });
+      return withIDBTimeout(p, IDB_TIMEOUT_MS, 'IDB ' + mode + ' timed out').then(
+        function (v) {
+          closeDB(db);
+          return v;
+        },
+        function (e) {
+          closeDB(db);
+          throw e;
+        }
+      );
     });
   }
 
   function idbPutAll(records) {
-    return openDB().then(function (db) {
-      return new Promise(function (resolve, reject) {
-        var tx = db.transaction(STORE, 'readwrite');
-        var os = tx.objectStore(STORE);
-        for (var i = 0; i < records.length; i++) os.put(records[i]);
-        tx.oncomplete = function () {
-          resolve(true);
-        };
-        tx.onerror = function () {
-          reject(tx.error);
-        };
-      });
+    return idbTx('readwrite', function (os, tx, resolve) {
+      for (var i = 0; i < records.length; i++) os.put(records[i]);
+      tx.oncomplete = function () {
+        resolve(true);
+      };
     });
   }
 
   function idbGetAll() {
-    return openDB().then(function (db) {
-      return new Promise(function (resolve, reject) {
-        var tx = db.transaction(STORE, 'readonly');
-        var req = tx.objectStore(STORE).getAll();
-        req.onsuccess = function () {
-          resolve(req.result || []);
-        };
-        req.onerror = function () {
-          reject(req.error);
-        };
-      });
+    return idbTx('readonly', function (os, tx, resolve, reject) {
+      var rows;
+      var req = os.getAll();
+      req.onsuccess = function () {
+        rows = req.result || [];
+      };
+      req.onerror = function () {
+        reject(req.error || new Error('IDB read failed'));
+      };
+      // Resolve only once the transaction commits, with the request result —
+      // never with a boolean, which would corrupt _mem.
+      tx.oncomplete = function () {
+        resolve(rows || []);
+      };
     });
   }
 
   function idbClear(collection) {
-    return openDB().then(function (db) {
-      return new Promise(function (resolve, reject) {
-        var tx = db.transaction(STORE, 'readwrite');
-        var os = tx.objectStore(STORE);
-        if (!collection) {
-          os.clear();
-          tx.oncomplete = function () {
-            resolve(true);
-          };
-          tx.onerror = function () {
-            reject(tx.error);
-          };
-          return;
+    return idbTx('readwrite', function (os, tx, resolve, reject) {
+      tx.oncomplete = function () {
+        resolve(true);
+      };
+      if (!collection) {
+        os.clear();
+        return;
+      }
+      var idx = os.index('collection');
+      var req = idx.openCursor(IDBKeyRange.only(collection));
+      req.onerror = function () {
+        reject(req.error || new Error('IDB cursor failed'));
+      };
+      req.onsuccess = function () {
+        var cursor = req.result;
+        if (cursor) {
+          cursor.delete();
+          cursor.continue();
         }
-        var idx = os.index('collection');
-        var req = idx.openCursor(IDBKeyRange.only(collection));
-        req.onsuccess = function () {
-          var cursor = req.result;
-          if (cursor) {
-            cursor.delete();
-            cursor.continue();
-          }
-        };
-        tx.oncomplete = function () {
-          resolve(true);
-        };
-        tx.onerror = function () {
-          reject(tx.error);
-        };
-      });
+      };
     });
   }
 
@@ -407,7 +477,7 @@
     loadSettings();
     _ready = idbGetAll()
       .then(function (rows) {
-        _mem = rows || [];
+        _mem = Array.isArray(rows) ? rows : [];
         // Cap
         if (_mem.length > MAX_CHUNKS) {
           _mem = _mem.slice(_mem.length - MAX_CHUNKS);
@@ -420,10 +490,15 @@
           if (legacy && !migrated && (!_mem || !_mem.length)) {
             var docs = JSON.parse(legacy);
             if (Array.isArray(docs) && docs.length) {
-              return reindexFromLegacy(docs).then(function () {
-                localStorage.setItem('aether_rag_v2_migrated', '1');
-                return true;
-              });
+              // Do NOT call reindexFromLegacy() here: it awaits ready(), which
+              // is this very promise — that circular wait hangs ready() forever.
+              // Migrate synchronously and persist fire-and-forget instead.
+              for (var d = 0; d < docs.length; d++) {
+                addTextSync(docs[d], { collection: 'default', source: 'legacy' });
+              }
+              localStorage.setItem('aether_rag_v2_migrated', '1');
+              persist();
+              return true;
             }
           }
         } catch (e) {}

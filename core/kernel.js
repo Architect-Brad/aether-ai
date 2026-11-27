@@ -247,12 +247,19 @@
       if (g.showNotification) g.showNotification('No flight to export', 'warn');
       return;
     }
-    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'aether-flight-' + (data.id || 'log') + '.json';
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    try {
+      if (typeof Blob === 'undefined' || !URL || typeof URL.createObjectURL !== 'function') {
+        throw new Error('Blob download unavailable');
+      }
+      var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'aether-flight-' + (data.id || 'log') + '.json';
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+    } catch (e) {
+      if (g.showNotification) g.showNotification('Flight export unavailable on this browser', 'warn');
+    }
   }
 
   function openTimelineModal() {
@@ -292,11 +299,19 @@
           }).join('') +
         '</div>';
       card.onclick = function () {
-        var blob = new Blob([JSON.stringify(f, null, 2)], { type: 'application/json' });
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = f.id + '.json';
-        a.click();
+        try {
+          if (typeof Blob === 'undefined' || !URL || typeof URL.createObjectURL !== 'function') {
+            throw new Error('Blob download unavailable');
+          }
+          var blob = new Blob([JSON.stringify(f, null, 2)], { type: 'application/json' });
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = f.id + '.json';
+          a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+        } catch (e) {
+          if (g.showNotification) g.showNotification('Flight export unavailable on this browser', 'warn');
+        }
       };
       body.appendChild(card);
     });

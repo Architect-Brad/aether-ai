@@ -17,7 +17,10 @@
     var w = window.innerWidth || 0;
     var coarse = false;
     try {
-      coarse = window.matchMedia('(pointer: coarse)').matches;
+      // Older WebViews may not implement matchMedia — fall back to width only.
+      if (typeof window.matchMedia === 'function') {
+        coarse = window.matchMedia('(pointer: coarse)').matches;
+      }
     } catch (e) {}
     if (!codingOn()) return false;
     return w <= BREAKPOINT || (coarse && w <= 900);
