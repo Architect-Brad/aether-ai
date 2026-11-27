@@ -37,6 +37,30 @@ Thanks for helping make the neural interface sharper.
 - Add the path to `sw.js` `CORE_ASSETS`.
 - Add a smoke assertion in `tests/smoke.html` when behaviour is pure/testable.
 
+## Load order, cascade, and reduced motion
+
+`index.html` loads the AETHER stylesheets in this order; later sheets win
+equal-specificity ties, so additive feature sheets must come last:
+
+1. `style.css` (base)
+2. `style-ivory.css` (light / Ivory theme)
+3. `style-mobile.css` (≤820px and ≤480px layout)
+4. `style-motion.css` (GPU hints + reduced-motion clamp)
+5. `style-type.css` (typography polish)
+6. `style-anim.css` (transition choreography)
+
+KaTeX loads after them. Keep overrides narrowly scoped: `style-type.css` targets
+dark-theme selectors and leaves Ivory's `!important` rules intact — no global
+`!important` cascade wars. Missing elements should cost nothing.
+
+Core scripts are classic `<script defer>` IIFEs, not ES modules: `core/version.js`
+loads first, `core/smooth-runtime.js` before `core/pack-loader.js`, and
+`core/mobile-ui.js` before `script.js`. New core modules need a `CORE_ASSETS` entry
+in `sw.js` too.
+
+The global `@media (prefers-reduced-motion: reduce)` clamp is owned by
+`style-motion.css`. New feature sheets should not add competing reduced-motion blocks.
+
 ## Version bumps
 
 1. Edit **only** `core/version.js` (`VERSION`, `CODENAME`, `BUILD`).
@@ -44,7 +68,10 @@ Thanks for helping make the neural interface sharper.
 3. Bump `sw.js` `CACHE_VERSION` to force clients to refresh.
 4. Add a changelog entry in `AETHER_CHANGELOG` inside `script.js`.
 
-Do not hardcode `v5.xx` in new UI strings — read `AETHER_VERSION_LABEL`.
+Do not hardcode `v5.xx` in new UI strings — read `AETHER_VERSION_LABEL` (or
+`AETHER_FULL_LABEL`) from `core/version.js` at runtime. Do **not** add literal
+fallback strings such as `'v5.16'`: a few stale fallbacks still exist in
+`script.js`, and the maintainer owns cleaning those up — never copy them into new code.
 
 ## Testing
 

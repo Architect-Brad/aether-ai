@@ -376,11 +376,22 @@
           return { ok: false, error: 'write to sensitive path blocked: ' + sp.path };
         }
       }
-      // rename/copy second path
-      if ((name === 'fs_rename' || name === 'fs_copy') && typeof args === 'string' && args.indexOf('|') !== -1) {
-        var pair = args.split('|');
-        var sp2 = safePath(pair[1]);
-        if (!sp2.ok) return { ok: false, error: 'dest path blocked: ' + sp2.error };
+      // rename/copy second path — validate the destination for object args
+      // too (newPath/dest/to), preserving the existing string behaviour.
+      if (name === 'fs_rename' || name === 'fs_copy') {
+        var destCandidate = null;
+        if (typeof args === 'string' && args.indexOf('|') !== -1) {
+          destCandidate = args.split('|')[1];
+        } else if (args && typeof args === 'object') {
+          destCandidate = args.newPath || args.dest || args.to;
+        }
+        if (destCandidate) {
+          var sp2 = safePath(destCandidate);
+          if (!sp2.ok) return { ok: false, error: 'dest path blocked: ' + sp2.error };
+          if (sp2.sensitive && /write|delete|patch|rename|copy|mkdir|search_replace/i.test(name)) {
+            return { ok: false, error: 'write to sensitive dest path blocked: ' + sp2.path };
+          }
+        }
       }
     }
 

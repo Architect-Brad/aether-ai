@@ -6,7 +6,9 @@
   'use strict';
 
   var _wired = false;
-  var _agentFlightId = null;
+  var _agentFlightId = null; // most recently armed agent flight (legacy no-arg end)
+  var _agentFlights = Object.create(null); // live flight ids -> true
+  var _agentFlightAliases = Object.create(null); // caller run ids -> flight ids
 
   function notify(msg, type) {
     if (typeof g.showNotification === 'function') g.showNotification(msg, type || 'info');
@@ -89,9 +91,27 @@
       : null;
     if (g.AETHER_Theater) g.AETHER_Theater.pulseReasoning();
 
-    var callModel = async function (messages) {
-      if (typeof g.callAISimple === 'function') return await g.callAISimple(messages);
-      // Fallback: use fetch against apiConfig if exposed
+    // Council resolves each seat to a concrete provider/model before calling
+    // this. Honour both; fall back to the single configured model when a seat
+    // has no override (or the caller cannot switch providers).
+    var callModel = async function (messages, seat) {
+      var target = seat || {};
+      var provider = target.provider || null;
+      var model = target.model || null;
+      // Optional provider-aware hook for true cross-provider councils.
+      if (typeof g.__aetherCallSeatModel === 'function') {
+        return await g.__aetherCallSeatModel(messages, {
+          provider: provider,
+          model: model,
+          seat: target,
+        });
+      }
+      if (typeof g.callAISimple === 'function') {
+        return await g.callAISimple(messages, model || undefined);
+      }
+      if (typeof g.callModelDirect === 'function') {
+        return await g.callModelDirect(messages.map(function (m) { return m.content; }).join('\n\n'));
+      }
       throw new Error('callAISimple not exposed — open SETUP and use chat once, then retry Council');
     };
 
@@ -212,20 +232,38 @@
     // Make bridge functions visible for main script hooks
     g.AETHER_runCouncil = runCouncil;
     g.AETHER_instrumentTools = instrumentTools;
-    g.__aetherBeginAgentFlight = function (goal) {
-      if (g.AETHER_Kernel) {
-        g.AETHER_Kernel.ensurePanel();
-        _agentFlightId = g.AETHER_Kernel.beginFlight({ goal: goal, kind: 'agent' });
-        return _agentFlightId;
+    // Optional runId lets script.js give each run its own flight key so a
+    // stopped run cannot close a second run's flight (returned id works too).
+    g.__aetherBeginAgentFlight = function (goal, runId) {
+      if (!g.AETHER_Kernel) return null;
+      g.AETHER_Kernel.ensurePanel();
+      var id = g.AETHER_Kernel.beginFlight({ goal: goal, kind: 'agent' });
+      if (id == null) return null;
+      _agentFlights[id] = true;
+      if (runId != null && String(runId) !== String(id)) {
+        _agentFlightAliases[String(runId)] = id;
       }
+      _agentFlightId = id;
+      return id;
     };
-    g.__aetherEndAgentFlight = function (status) {
-      // script.js can call this twice (done branch + finally); stay idempotent
-      // and always close this agent's own flight, even if a Council flight overlaps.
-      if (_agentFlightId == null) return null;
-      var id = _agentFlightId;
-      _agentFlightId = null;
-      if (g.AETHER_Kernel) return g.AETHER_Kernel.endFlight(status || 'landed', id);
+    /**
+     * Close an agent flight. Pass the id returned by begin (or the runId
+     * supplied to it) to close a specific run; no args closes the most
+     * recent one for backward compatibility. Safe to call repeatedly.
+     */
+    g.__aetherEndAgentFlight = function (status, idOrRunId) {
+      var key = idOrRunId == null ? null : String(idOrRunId);
+      var flightId = key != null
+        ? (_agentFlightAliases[key] || key)
+        : _agentFlightId;
+      if (flightId == null || !_agentFlights[flightId]) return null;
+      Object.keys(_agentFlightAliases).forEach(function (alias) {
+        if (_agentFlightAliases[alias] === flightId) delete _agentFlightAliases[alias];
+      });
+      delete _agentFlights[flightId];
+      if (_agentFlightId === flightId) _agentFlightId = null;
+      if (!g.AETHER_Kernel) return null;
+      return g.AETHER_Kernel.endFlight(status || 'landed', flightId);
     };
     g.__aetherTrackGraph = function (type, label, meta) {
       if (g.AETHER_ThreadGraph) {

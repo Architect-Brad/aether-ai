@@ -626,6 +626,85 @@
   }
 
   /**
+   * Split the packed string formats the system prompt teaches models BEFORE
+   * generic schema repair. Returns null when raw is not a known packed format.
+   */
+  function unpackPackedStringArgs(name, raw, schema) {
+    if (typeof raw !== 'string') return null;
+    var s = raw;
+    if (!s.trim()) return null;
+    var n = normalizeName(name);
+    var props = schema.properties || {};
+    var required = schema.required || [];
+
+    // fs_patch / search_replace: path|||old|||new, SEARCH fence, AETHER_SEP
+    if (n === 'fs_patch' || n === 'search_replace') {
+      var fence = /<<<<<<<\s*SEARCH\s*\r?\n([\s\S]*?)\r?\n=======\s*\r?\n([\s\S]*?)\r?\n>>>>>>>\s*REPLACE/.exec(s);
+      if (fence) {
+        var fp = s.slice(0, fence.index).trim();
+        if (fp) return { path: fp, old_string: fence[1], new_string: fence[2] };
+      }
+      var sepToken = '\n<<<AETHER_SEP>>>\n';
+      var sep = s.indexOf(sepToken);
+      if (sep !== -1) {
+        var head = s.slice(0, sep);
+        var hnl = head.indexOf('\n');
+        if (hnl !== -1 && head.slice(0, hnl).trim()) {
+          return {
+            path: head.slice(0, hnl).trim(),
+            old_string: head.slice(hnl + 1),
+            new_string: s.slice(sep + sepToken.length),
+          };
+        }
+      }
+      if (s.indexOf('|||') !== -1) {
+        var parts = s.split('|||');
+        if (parts.length >= 3 && parts[0].trim() && parts[1] !== '') {
+          return {
+            path: parts[0].trim(),
+            old_string: parts.slice(1, -1).join('|||'),
+            new_string: parts[parts.length - 1],
+          };
+        }
+      }
+      return null;
+    }
+
+    // fs_write / write_file / puter_write_file: "path\ncontent" — keep the
+    // content verbatim (including newlines); only the first line is the path.
+    if (n === 'fs_write' || n === 'write_file' || n === 'puter_write_file') {
+      var nl = s.indexOf('\n');
+      if (nl !== -1 && s.slice(0, nl).trim()) {
+        return {
+          path: s.slice(0, nl).replace(/\r$/, '').trim(),
+          content: s.slice(nl + 1),
+        };
+      }
+      return null;
+    }
+
+    // Pipe-packed multi-arg tools: fs_rename, fs_copy, slack_post, jira_create,
+    // gitlab_mr, … Map positionally in schema property order. Only when >=2
+    // fields are required, so single-value strings containing "|" (shell,
+    // grep_files, …) are never mangled.
+    if (required.length >= 2 && s.indexOf('|') !== -1) {
+      var keys = Object.keys(props);
+      var values = s.split('|');
+      if (keys.length >= required.length) {
+        var obj = {};
+        keys.forEach(function (k, i) {
+          if (i < values.length) obj[k] = values[i].trim();
+        });
+        var complete = required.every(function (r) {
+          return obj[r] != null && obj[r] !== '';
+        });
+        if (complete) return obj;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Normalize any args shape into what tool.fn expects.
    * Returns { callArgs: array, preview: string }
    */
@@ -750,17 +829,38 @@
   }
 
   /**
+   * Recognise a genuine AETHER envelope. A literal format marker in arbitrary
+   * tool output must never be treated as one (it would skip result bounding).
+   */
+  function parseAetherEnvelope(raw) {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+    var s = raw.trim();
+    var env = null;
+    if (s.charAt(0) === '{') {
+      try { env = JSON.parse(s); } catch (e) {}
+    }
+    if (!env) {
+      var i = raw.lastIndexOf('\njson:');
+      if (i < 0) i = raw.indexOf('json:');
+      if (i >= 0) {
+        var tail = raw.slice(i).trim();
+        if (tail.indexOf('json:') === 0) {
+          try { env = JSON.parse(tail.slice(5)); } catch (e2) {}
+        }
+      }
+    }
+    if (!env || typeof env !== 'object' || Array.isArray(env) || env.format !== 'aether-tool-v2') return null;
+    return env;
+  }
+
+  /**
    * Wrap raw tool output into a consistent envelope string for models + UI.
    * Dual format: human header lines + JSON block for structured consumers.
    */
   function formatResult(name, raw, opts) {
     opts = opts || {};
-    // Passthrough if already structured dual format
-    if (typeof raw === 'string' && raw.indexOf('"format":"aether-tool-v2"') >= 0) return raw;
-    if (typeof raw === 'string' && (/^ok=(true|false)\b/.test(raw.trim()) || /^tool=/.test(raw.trim())) && opts.force !== true) {
-      // Upgrade legacy envelope with JSON trailer if missing
-      if (raw.indexOf('"format":"aether-tool-v2"') >= 0) return raw;
-    }
+    // Passthrough only for a real structured envelope, not a substring match.
+    if (parseAetherEnvelope(raw)) return raw;
     var env = buildEnvelope(name, raw, opts);
     var parts = [
       'tool=' + env.tool,
@@ -778,6 +878,9 @@
       // avoid double body
       return body.indexOf('summary:') >= 0 ? body : header + body;
     }
+    // A non-envelope body may already contain a "json:" line; never append a
+    // second trailer on top of it.
+    if (body.indexOf('\njson:') >= 0 || body.indexOf('json:') === 0) return header + body;
     var jsonLine =
       'json:' +
       JSON.stringify({
@@ -837,20 +940,25 @@
       obj = {};
     } else if (typeof args === 'string') {
       // try JSON first
+      var parsed = null;
       try {
-        var parsed = JSON.parse(args);
-        if (parsed && typeof parsed === 'object') obj = parsed;
-        else obj = {};
-      } catch (e) {
-        obj = {};
-      }
-      // Map bare string onto primary key
-      var pkeys = meta.primaryKeys || ['query', 'path', 'url', 'arg', 'command'];
-      var needed = (schema.required || [])[0] || pkeys[0];
-      if (!Object.keys(obj).length || (schema.required || []).some(function (r) { return obj[r] == null || obj[r] === ''; })) {
-        if (typeof args === 'string' && args.trim()) {
-          // If JSON parse gave empty or missing required, use string as primary
-          if (!Object.keys(obj).length || (needed && (obj[needed] == null || obj[needed] === ''))) {
+        var candidate = JSON.parse(args);
+        if (candidate && typeof candidate === 'object') parsed = candidate;
+      } catch (e) {}
+      if (parsed && !Array.isArray(parsed)) {
+        obj = parsed;
+      } else {
+        // Known packed formats are split before generic single-field repair,
+        // otherwise "path|||old|||new" would be copied into every required field.
+        var packed = unpackPackedStringArgs(name, args, schema);
+        if (packed) {
+          obj = packed;
+          repaired = true;
+        } else {
+          // Map a genuine bare string onto the primary key
+          var pkeys = meta.primaryKeys || ['query', 'path', 'url', 'arg', 'command'];
+          var needed = (schema.required || [])[0] || pkeys[0];
+          if (args.trim() && needed) {
             obj = {};
             obj[needed] = args;
             repaired = true;
@@ -903,18 +1011,9 @@
     var required = schema.required || [];
     required.forEach(function (r) {
       if (obj[r] == null || obj[r] === '') {
-        // one-shot repair from primaryKeys leftovers
-        var pk = meta.primaryKeys || [];
-        for (var i = 0; i < pk.length; i++) {
-          if (pk[i] !== r && obj[pk[i]] != null && obj[pk[i]] !== '') {
-            obj[r] = obj[pk[i]];
-            repaired = true;
-            break;
-          }
-        }
-        if (obj[r] == null || obj[r] === '') {
-          errors.push('missing required: ' + r);
-        }
+        // Never synthesise a required field by copying another field's value:
+        // that silently turns one packed string into N identical fields.
+        errors.push('missing required: ' + r);
       }
     });
 
@@ -1258,11 +1357,13 @@
     pending.sort(function (a, b) {
       return a.index - b.index;
     });
-    // Dedupe identical adjacent
+    // Dedupe only truly identical calls — the full args (including path) must
+    // match; a 200-char prefix collapsed distinct patches with the same prefix.
     var out = [];
     var seen = {};
     pending.forEach(function (c) {
-      var key = normalizeName(c.name) + '::' + String(c.args).slice(0, 200);
+      var argsKey = typeof c.args === 'string' ? c.args : JSON.stringify(c.args);
+      var key = normalizeName(c.name) + '::' + argsKey;
       if (seen[key]) return;
       seen[key] = true;
       out.push(c);
@@ -1397,10 +1498,66 @@
     var v3 = validateAndRepairArgs('fs_patch', { path: 'a.js', old: 'x', new: 'y' });
     ok('repair_old_new_aliases', v3.args.old_string === 'x' && v3.args.new_string === 'y', JSON.stringify(v3.args));
 
+    // end-to-end packed string repair (formats taught by the system prompt)
+    var pp = validateAndRepairArgs('fs_patch', 'a.js|||old line|||new line');
+    ok(
+      'repair_packed_patch',
+      pp.ok && pp.repaired && pp.args.path === 'a.js' && pp.args.old_string === 'old line' && pp.args.new_string === 'new line',
+      JSON.stringify(pp.args)
+    );
+    var pw = validateAndRepairArgs('fs_write', 'notes.txt\nhello\nworld');
+    ok(
+      'repair_packed_write',
+      pw.ok && pw.args.path === 'notes.txt' && pw.args.content === 'hello\nworld',
+      JSON.stringify(pw.args)
+    );
+    var pr = validateAndRepairArgs('fs_rename', 'old.js|new.js');
+    ok(
+      'repair_packed_rename',
+      pr.ok && pr.args.oldPath === 'old.js' && pr.args.newPath === 'new.js',
+      JSON.stringify(pr.args)
+    );
+    var pc = validateAndRepairArgs('fs_copy', 'src.js|dest.js');
+    ok(
+      'repair_packed_copy',
+      pc.ok && pc.args.src === 'src.js' && pc.args.dest === 'dest.js',
+      JSON.stringify(pc.args)
+    );
+    var ps = validateAndRepairArgs('slack_post', 'general|hello team');
+    ok(
+      'repair_packed_slack',
+      ps.ok && ps.args.channel === 'general' && ps.args.message === 'hello team',
+      JSON.stringify(ps.args)
+    );
+    var pj = validateAndRepairArgs('jira_create', 'ENG|Fix bug|Details here');
+    ok(
+      'repair_packed_jira',
+      pj.ok && pj.args.project === 'ENG' && pj.args.summary === 'Fix bug' && pj.args.description === 'Details here',
+      JSON.stringify(pj.args)
+    );
+    var pg = validateAndRepairArgs('gitlab_mr', 'group/proj|Add feature|feature|main');
+    ok(
+      'repair_packed_gitlab',
+      pg.ok && pg.args.project === 'group/proj' && pg.args.title === 'Add feature' && pg.args.source === 'feature' && pg.args.target === 'main',
+      JSON.stringify(pg.args)
+    );
+    var pbad = validateAndRepairArgs('fs_rename', 'only-one-path');
+    ok('no_alias_copy', !pbad.ok && pbad.errors.indexOf('missing required: newPath') >= 0 && pbad.args.newPath == null, pbad.errors.join(','));
+
+    var patchBase = 'a.js|||' + new Array(220).join('x') + '|||';
+    var dup = parseToolCallsFromText('[[fs_patch: ' + patchBase + 'one]] [[fs_patch: ' + patchBase + 'two]]');
+    ok('dedupe_distinct_patches', dup.length === 2, 'n=' + dup.length);
+    var dupSame = parseToolCallsFromText('[[fs_read: a.js]] [[fs_read: a.js]]');
+    ok('dedupe_identical_calls', dupSame.length === 1, 'n=' + dupSame.length);
+
     // envelope
     var fr = formatResult('fs_list', 'a\nb\nc', { ok: true, ms: 12, force: true });
     ok('envelope_header', /tool=fs_list/.test(fr) && /ok=true/.test(fr) && /summary:/.test(fr), fr.slice(0, 80));
     ok('envelope_json', /"format":"aether-tool-v2"/.test(fr) || /json:\{/.test(fr), '');
+    var fakeEnv = formatResult('fs_read', 'body with "format":"aether-tool-v2" literal ' + new Array(300).join('x'), { maxResult: 60, force: true });
+    ok('envelope_literal_not_passthrough', fakeEnv.indexOf('[truncated') >= 0 && (fakeEnv.match(/json:/g) || []).length === 1, fakeEnv.slice(-60));
+    var envOnce = formatResult('fs_read', 'hello', { force: true });
+    ok('envelope_no_double_trailer', formatResult('fs_read', envOnce, { force: true }) === envOnce, '');
 
     ok('failure_detect', isFailureString('ok=false error=nope') && !isFailureString('file contents here'), '');
 

@@ -206,6 +206,24 @@
   }
 
   /**
+   * Strip the ToolRuntime.formatResult() dual envelope ("tool=… ok=…"
+   * header, "summary:" line and trailing "json:{…}") to recover the raw
+   * result body that bridge callers expect. Non-envelope strings (e.g.
+   * HTTP-transport output or callTool's plain fallback) pass through.
+   */
+  function unwrapToolEnvelope(text) {
+    var s = String(text == null ? '' : text);
+    var nl = s.indexOf('\n');
+    if (nl === -1 || !/^tool=/.test(s.slice(0, nl))) return s;
+    var body = s.slice(nl + 1);
+    var nl2 = body.indexOf('\n');
+    if (nl2 !== -1 && /^summary:/.test(body.slice(0, nl2))) body = body.slice(nl2 + 1);
+    var ji = body.lastIndexOf('\njson:');
+    if (ji !== -1) body = body.slice(0, ji);
+    return body;
+  }
+
+  /**
    * Build a TOOL_REGISTRY fn for an MCP tool descriptor.
    */
   function makeToolFn(server, toolDesc) {
@@ -219,7 +237,12 @@
       var reg = getRegistry();
       if (transport === 'alias' || transport === 'auto') {
         if (reg && reg[localName] && reg[localName]._mcp !== true && typeof reg[localName].fn === 'function') {
-          // Avoid recursion: call native
+          // Avoid recursion: route the native tool through callTool so the
+          // same gates (paths, shell allowlist, confirmation, redaction,
+          // timeout, health, kernel log) apply as for any native call.
+          if (typeof g.callTool === 'function') {
+            return unwrapToolEnvelope(await g.callTool(localName, arg));
+          }
           return reg[localName].fn(typeof arg === 'string' ? arg : arg);
         }
         // Try common renames
@@ -233,6 +256,14 @@
         };
         var mapped = aliasMap[localName] || aliasMap[originalName];
         if (mapped && reg && reg[mapped] && typeof reg[mapped].fn === 'function') {
+          // Route aliases through the unified callTool so preflight,
+          // permission gating, redaction, health, timeout and kernel logging
+          // all apply — never call the registry fn directly (that bypasses
+          // every security gate for destructive tools).
+          if (typeof g.callTool === 'function') {
+            return unwrapToolEnvelope(await g.callTool(mapped, arg));
+          }
+          // Fallback for non-registry / headless transports with no callTool.
           var packed = arg;
           if (g.AETHER_ToolRuntime && g.AETHER_ToolRuntime.normalizeArgs) {
             var n = g.AETHER_ToolRuntime.normalizeArgs(mapped, arg);

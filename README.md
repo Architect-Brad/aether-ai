@@ -1,8 +1,8 @@
 # AETHER Neural Interface v5.40 — Hero Path
 
-**Open-source. Local-first. Zero backend.**
+**Open-source. Local-first. Zero backend by default; opt-in cloud.**
 
-Browser-native **neural operating system** with agent tools, CODE/Ghost, RAG, and AetherViz. Zero build step. GPL-3.0.
+Browser-native **neural operating system** with agent tools, CODE/Ghost, RAG, and AetherViz. Zero build step. GPL-3.0-or-later.
 
 > *Agent Closure · Tool Runtime v2 · Ghost · `/rag index` · AetherViz v2 · Composer Float · `/heropath` · `/shipcheck`*
 
@@ -15,6 +15,16 @@ python3 -m http.server 3000
 ```
 
 Or open `index.html` (some STT/PWA features need localhost/HTTPS).
+
+## Backend & cloud
+
+There is **no application backend by default**. Conversations, settings, and workspace
+state stay in the browser (localStorage / IndexedDB), and model providers are called
+directly from the client with your own keys (BYOK) or a local endpoint such as Ollama.
+
+Cloud is opt-in. Firebase Auth (Google sign-in via redirect) and Firestore workspace /
+project sync are implemented in `script.js`; they activate only when a Firebase config
+is present in `localStorage.aether_firebase_config`. Without it, no cloud path runs.
 
 ---
 
@@ -41,13 +51,14 @@ Browser smoke page: [tests/hero-path.html](tests/hero-path.html)
 | Mode | What it does |
 |------|----------------|
 | **AGENT** | Multi-step tool use + tool→model continue |
-| **CODE** | Code Pro: Ghost · `fs_patch` · folder · PR set |
+| **CODE** | Code Pro: Ghost · `fs_patch` · folder · changeset export |
 | **DEEP** | Deep Research v3 |
 | **WS** | Workspace memory |
 | **BEAST** | Max autonomy |
-| **COUNCIL** | Multi-model deliberation |
-| **GRAPH** | Thread constellation |
 | **SETUP** | Provider + key / local endpoint |
+
+Model Council (`/council`) and the Neural Thread Graph (`/graph`) are slash-command
+features, not hero toolbar modes.
 
 ## Flagship systems
 
@@ -109,4 +120,4 @@ python3 -m http.server 3000
 
 ## Contributing
 
-See `CONTRIBUTING.md`. License: GPL-3.0-or-later.
+See `CONTRIBUTING.md`. License: GPL-3.0-or-later (see `LICENSE.md`).

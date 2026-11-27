@@ -26,6 +26,75 @@
     try { localStorage.setItem(SEATS_KEY, JSON.stringify(seats)); } catch (e) {}
   }
 
+  /** Sanitise a seat id before it is used as a DOM id / selector. */
+  function safeSeatId(value) {
+    var s = String(value == null ? '' : value).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 48);
+    return s || 'seat';
+  }
+
+  /** Only allow validated CSS colours (never interpolate raw config). */
+  function safeColor(value, fallback) {
+    var c = String(value == null ? '' : value).trim();
+    if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(c)) return c;
+    var named = ['red', 'green', 'blue', 'orange', 'yellow', 'cyan', 'magenta',
+      'white', 'black', 'gray', 'grey', 'purple', 'pink', 'lime', 'teal'];
+    var lower = c.toLowerCase();
+    if (named.indexOf(lower) !== -1) return lower;
+    return fallback || '#00f3ff';
+  }
+
+  /**
+   * Best-effort read of the active provider/model without touching script.js.
+   * An explicit hook wins; otherwise read the SETUP fields / saved config.
+   */
+  function configuredModel() {
+    var out = { provider: '', model: '' };
+    try {
+      if (typeof g.__aetherGetApiConfig === 'function') {
+        var cfg = g.__aetherGetApiConfig() || {};
+        out.provider = cfg.provider || '';
+        out.model = cfg.model || '';
+      }
+    } catch (e) {}
+    try {
+      var ps = document.getElementById('provider-select');
+      var mi = document.getElementById('model-input');
+      if (!out.provider && ps && ps.value) out.provider = ps.value;
+      if (!out.model && mi && mi.value) out.model = mi.value;
+    } catch (e2) {}
+    try {
+      if (!out.provider || !out.model) {
+        var raw = localStorage.getItem('aether_api_config');
+        if (raw) {
+          var saved = JSON.parse(raw);
+          // Encrypted blobs carry salt/iv and cannot be read here.
+          if (saved && !saved.salt && !saved.iv) {
+            out.provider = out.provider || saved.provider || '';
+            out.model = out.model || saved.model || '';
+          }
+        }
+      }
+    } catch (e3) {}
+    return out;
+  }
+
+  /** Resolve a seat to a concrete provider/model, falling back to the active one. */
+  function resolveSeat(seat) {
+    seat = seat || {};
+    var cfg = configuredModel();
+    var model = seat.model == null ? '' : String(seat.model).trim();
+    var provider = seat.provider == null ? '' : String(seat.provider).trim();
+    return {
+      id: seat.id,
+      role: seat.role,
+      color: seat.color,
+      system: seat.system,
+      provider: provider || cfg.provider || null,
+      model: model || cfg.model || null,
+      custom: !!(provider || model),
+    };
+  }
+
   /**
    * Run council.
    * @param {string} prompt
@@ -45,8 +114,9 @@
 
     var callModel = opts.callModel;
     if (typeof callModel !== 'function') {
-      callModel = async function (messages) {
-        if (typeof g.callAISimple === 'function') return g.callAISimple(messages);
+      callModel = async function (messages, seat) {
+        var model = seat && seat.model;
+        if (typeof g.callAISimple === 'function') return g.callAISimple(messages, model || undefined);
         if (typeof g.callModelDirect === 'function') {
           return g.callModelDirect(messages.map(function (m) { return m.content; }).join('\n\n'));
         }
@@ -57,20 +127,23 @@
     // Parallel seats
     var tasks = seats.map(function (seat) {
       return (async function () {
+        // Each seat gets its own resolved provider/model; seats with no
+        // override gracefully use the single configured model.
+        var target = resolveSeat(seat);
         setSeatState(chamber, seat.id, 'deliberating');
         var t0 = Date.now();
         try {
           var messages = [
-            { role: 'system', content: seat.system + '\nRespond as your seat. Sign your key points clearly.' },
+            { role: 'system', content: (seat.system || '') + '\nRespond as your seat. Sign your key points clearly.' },
             { role: 'user', content: prompt },
           ];
-          var text = await callModel(messages, seat);
+          var text = await callModel(messages, target);
           var ms = Date.now() - t0;
           setSeatState(chamber, seat.id, 'done', text, ms);
-          return { seat: seat, text: text, ms: ms, ok: true };
+          return { seat: seat, target: target, provider: target.provider, model: target.model, text: text, ms: ms, ok: true };
         } catch (e) {
           setSeatState(chamber, seat.id, 'error', e.message || String(e), Date.now() - t0);
-          return { seat: seat, text: e.message || String(e), ms: Date.now() - t0, ok: false };
+          return { seat: seat, target: target, provider: target.provider, model: target.model, text: e.message || String(e), ms: Date.now() - t0, ok: false };
         }
       })();
     });
@@ -93,7 +166,7 @@
           },
           { role: 'user', content: 'Original question:\n' + prompt + '\n\nSeat briefs:\n' + dossier },
         ];
-        synthesis = await callModel(synthMessages, { id: 'speaker', role: 'Speaker' });
+        synthesis = await callModel(synthMessages, resolveSeat({ id: 'speaker', role: 'Speaker' }));
         setChamberPhase(chamber, 'complete', synthesis);
       } catch (e) {
         synthesis = 'Synthesis failed: ' + e.message;
@@ -136,19 +209,33 @@
     el.querySelector('#council-close').onclick = function () { el.remove(); };
 
     var seatsEl = el.querySelector('#council-seats');
-    seats.forEach(function (s) {
+    var seatDomIds = Object.create(null); // raw seat id -> sanitised DOM id
+    var usedIds = Object.create(null);
+    el._seatDomIds = seatDomIds;
+    seats.forEach(function (s, i) {
+      var rawId = s.id == null ? '' : String(s.id);
+      var safeId = safeSeatId(rawId);
+      if (usedIds[safeId]) safeId = safeId + '_' + i;
+      usedIds[safeId] = true;
+      seatDomIds[rawId] = safeId;
+      var color = safeColor(s.color);
       var card = document.createElement('div');
       card.className = 'council-seat';
-      card.id = 'seat-' + s.id;
-      card.style.borderColor = s.color;
+      card.id = 'seat-' + safeId;
+      // Colours are applied as properties, never interpolated into markup.
+      card.style.borderColor = color;
       card.innerHTML =
-        '<div class="seat-hdr" style="color:' + s.color + '">' +
-          '<span class="seat-orb" style="background:' + s.color + '"></span>' +
+        '<div class="seat-hdr">' +
+          '<span class="seat-orb"></span>' +
           esc(s.role) +
           '<span class="seat-state">waiting</span>' +
           '<span class="seat-ms"></span>' +
         '</div>' +
         '<div class="seat-body"><span class="seat-wait">Awaiting deliberation…</span></div>';
+      var hdr = card.querySelector('.seat-hdr');
+      var orb = card.querySelector('.seat-orb');
+      if (hdr) hdr.style.color = color;
+      if (orb) orb.style.background = color;
       seatsEl.appendChild(card);
     });
 
@@ -157,8 +244,14 @@
   }
 
   function setSeatState(chamber, seatId, state, text, ms) {
-    var card = chamber.querySelector('#seat-' + seatId);
-    if (!card) return;
+    if (!chamber) return;
+    var key = seatId == null ? '' : String(seatId);
+    var map = chamber._seatDomIds || {};
+    var safeId = Object.prototype.hasOwnProperty.call(map, key) ? map[key] : safeSeatId(key);
+    // getElementById + containment check: no selector string from config, and
+    // no chance of updating a look-alike card from another chamber.
+    var card = document.getElementById('seat-' + safeId);
+    if (!card || !chamber.contains(card)) return;
     var st = card.querySelector('.seat-state');
     var body = card.querySelector('.seat-body');
     var msEl = card.querySelector('.seat-ms');
@@ -209,6 +302,8 @@
     loadSeats: loadSeats,
     saveSeats: saveSeats,
     defaultSeats: defaultSeats,
+    resolveSeat: resolveSeat,
+    configuredModel: configuredModel,
     openConfig: openConfig,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : window);

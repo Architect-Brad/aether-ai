@@ -9,7 +9,11 @@
 
   var MAX_STEPS = 6;
   var MAX_TOOL_RESULT = 3500;
-  var _running = false;
+  // Per-job / per-swarm counters: abortAll must not release the swarm guard
+  // while jobs are still winding down, and the global status must not flip
+  // back to idle while another job is still running.
+  var _activeJobs = 0;
+  var _activeSwarms = 0;
   var _jobs = [];
 
   var ROLES = {
@@ -208,77 +212,112 @@
       if (typeof g.smoothScrollToBottom === 'function') g.smoothScrollToBottom();
     }
 
+    _activeJobs++;
     setStatus(job, 'running');
     if (typeof g.setCodeSessionStatus === 'function') {
       g.setCodeSessionStatus('thinking', role.label + ' agent…');
     }
-
-    var lastText = '';
-    for (var step = 0; step < (job.maxSteps || MAX_STEPS); step++) {
-      if (job.abort) {
-        setStatus(job, 'aborted');
-        break;
-      }
-      logLine(job, 'step ' + (step + 1) + '…', 'dim');
-      var response;
-      try {
-        response = await callModel(history);
-      } catch (e) {
-        logLine(job, 'model error: ' + e.message, 'err');
-        setStatus(job, 'error');
-        job.error = e.message;
-        break;
-      }
-      lastText = String(response || '');
-      history.push({ role: 'assistant', content: lastText });
-
-      var tools = parseTools(lastText, role.tools);
-      if (!tools.length) {
-        // Done — no more tools
-        break;
-      }
-      var toolBlock = '';
-      for (var t = 0; t < tools.length; t++) {
-        logLine(job, '[[' + tools[t].name + ': ' + tools[t].arg.slice(0, 60) + ']]', 'tool');
-        if (typeof g.pushCodeToolCard === 'function') {
-          try {
-            g.pushCodeToolCard(tools[t].name, 'running', tools[t].arg);
-          } catch (e2) {}
+    try {
+      var lastText = '';
+      var toolCalls = 0;
+      var lastStepHadTools = false;
+      for (var step = 0; step < (job.maxSteps || MAX_STEPS); step++) {
+        if (job.abort) {
+          setStatus(job, 'aborted');
+          break;
         }
-        var result = await runTool(tools[t].name, tools[t].arg);
-        logLine(job, '→ ' + result.slice(0, 120), /error|ok=false/i.test(result) ? 'err' : 'ok');
-        toolBlock += '[' + tools[t].name + ']\n' + result + '\n\n';
-      }
-      history.push({ role: 'user', content: 'Tool results:\n' + toolBlock + '\nContinue or finish with a clear summary.' });
-    }
+        logLine(job, 'step ' + (step + 1) + '…', 'dim');
+        var response;
+        try {
+          response = await callModel(history);
+        } catch (e) {
+          logLine(job, 'model error: ' + e.message, 'err');
+          setStatus(job, 'error');
+          job.error = e.message;
+          break;
+        }
+        lastText = String(response || '');
+        history.push({ role: 'assistant', content: lastText });
 
-    // Strip tool call markup for final display
-    var clean = lastText
-      .replace(/\[\[(?:fs_write|fs_patch|search_replace|write_file):[\s\S]*?\]\]/gi, '')
-      .replace(/\[\[\w+:\s*[^\]]*\]\]/g, '')
-      .trim();
-    job.result = clean || lastText;
-    setResult(job, '### ' + role.label + ' result\n\n' + job.result);
-    if (job.status === 'running') setStatus(job, 'done');
-    if (typeof g.setCodeSessionStatus === 'function') {
-      g.setCodeSessionStatus('idle', 'Plan → Patch → Verify');
+        var tools = parseTools(lastText, role.tools);
+        if (!tools.length) {
+          // Done — no more tools
+          lastStepHadTools = false;
+          break;
+        }
+        lastStepHadTools = true;
+        var toolBlock = '';
+        for (var t = 0; t < tools.length; t++) {
+          logLine(job, '[[' + tools[t].name + ': ' + tools[t].arg.slice(0, 60) + ']]', 'tool');
+          if (typeof g.pushCodeToolCard === 'function') {
+            try {
+              g.pushCodeToolCard(tools[t].name, 'running', tools[t].arg);
+            } catch (e2) {}
+          }
+          var result;
+          try {
+            result = await runTool(tools[t].name, tools[t].arg);
+          } catch (eTool) {
+            result = 'ERROR: ' + eTool.message;
+          }
+          toolCalls++;
+          logLine(job, '→ ' + result.slice(0, 120), /error|ok=false/i.test(result) ? 'err' : 'ok');
+          toolBlock += '[' + tools[t].name + ']\n' + result + '\n\n';
+        }
+        history.push({ role: 'user', content: 'Tool results:\n' + toolBlock + '\nContinue or finish with a clear summary.' });
+      }
+
+      // The last model turn often contains only tool calls. Ask for a clean
+      // report now that tool results are in, instead of showing raw markup.
+      if (lastStepHadTools && job.status === 'running') {
+        try {
+          history.push({
+            role: 'user',
+            content:
+              'All tool calls are complete. Do not emit any more [[tool: ...]] calls. ' +
+              'Give the final concise ' + role.label.toLowerCase() +
+              ' report on findings, files touched, and risks.',
+          });
+          var finalResponse = await callModel(history);
+          if (finalResponse != null && String(finalResponse).trim()) {
+            lastText = String(finalResponse);
+          }
+        } catch (eFinal) {
+          logLine(job, 'final summary error: ' + eFinal.message, 'err');
+        }
+      }
+
+      // Strip tool call markup for final display
+      var clean = lastText
+        .replace(/\[\[(?:fs_write|fs_patch|search_replace|write_file):[\s\S]*?\]\]/gi, '')
+        .replace(/\[\[\w+:\s*[^\]]*\]\]/g, '')
+        .trim();
+      job.result = clean || ('Completed ' + toolCalls + ' tool call(s) with no textual summary.');
+      setResult(job, '### ' + role.label + ' result\n\n' + job.result);
+      if (job.status === 'running') setStatus(job, 'done');
+      if (g.AETHER_Kernel) {
+        g.AETHER_Kernel.log('subagent.' + job.role, job.goal.slice(0, 80), 'call', { ok: job.status === 'done' });
+      }
+      if (g.AETHER_ThreadGraph) {
+        try {
+          g.AETHER_ThreadGraph.addNode({
+            type: 'agent',
+            label: role.label + ': ' + job.goal.slice(0, 40),
+            meta: { subagent: job.id, role: job.role },
+          });
+        } catch (e3) {}
+      }
+      if (g.showNotification) {
+        g.showNotification(role.label + ' agent ' + job.status, job.status === 'done' ? 'success' : 'warn');
+      }
+      return job;
+    } finally {
+      _activeJobs = Math.max(0, _activeJobs - 1);
+      // Only the last active job resets the shared status to idle.
+      if (!_activeJobs && typeof g.setCodeSessionStatus === 'function') {
+        g.setCodeSessionStatus('idle', 'Plan → Patch → Verify');
+      }
     }
-    if (g.AETHER_Kernel) {
-      g.AETHER_Kernel.log('subagent.' + job.role, job.goal.slice(0, 80), 'call', { ok: job.status === 'done' });
-    }
-    if (g.AETHER_ThreadGraph) {
-      try {
-        g.AETHER_ThreadGraph.addNode({
-          type: 'agent',
-          label: role.label + ': ' + job.goal.slice(0, 40),
-          meta: { subagent: job.id, role: job.role },
-        });
-      } catch (e3) {}
-    }
-    if (g.showNotification) {
-      g.showNotification(role.label + ' agent ' + job.status, job.status === 'done' ? 'success' : 'warn');
-    }
-    return job;
   }
 
   async function spawn(opts) {
@@ -344,14 +383,14 @@
    */
   async function swarm(goal, opts) {
     opts = opts || {};
-    if (_running) {
+    if (_activeSwarms > 0) {
       if (g.showNotification) g.showNotification('A swarm is already running', 'warn');
       return null;
     }
-    _running = true;
+    _activeSwarms++;
     goal = String(goal || '').trim();
     if (!goal) {
-      _running = false;
+      _activeSwarms = Math.max(0, _activeSwarms - 1);
       return null;
     }
     var mode = opts.parallel ? 'parallel-explore → plan' : 'explore → plan';
@@ -398,7 +437,9 @@
       }
       return { explore: ex, parallel: parallel, plan: pl, edit: ed };
     } finally {
-      _running = false;
+      // The guard stays up until the swarm itself finishes, even after
+      // abortAll() flags jobs — a second swarm must not overlap live jobs.
+      _activeSwarms = Math.max(0, _activeSwarms - 1);
       try {
         if (g.AETHER_GitLite && g.AETHER_GitLite.refreshChip) g.AETHER_GitLite.refreshChip();
       } catch (e2) {}
@@ -410,14 +451,15 @@
   }
 
   function isRunning() {
-    return _running;
+    return _activeSwarms > 0 || _activeJobs > 0;
   }
 
   function abortAll() {
     _jobs.forEach(function (j) {
       if (j.status === 'running' || j.status === 'queued') j.abort = true;
     });
-    _running = false;
+    // Do NOT clear the guard here: jobs keep running until each observes the
+    // abort flag, and their finally blocks own the counters.
   }
 
   g.AETHER_Subagents = {

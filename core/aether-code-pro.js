@@ -246,16 +246,28 @@
       'pre-accept-all'
     );
     var n = 0;
+    var failed = [];
+    // Sequential by design: ghost-commits.js rebases each proposal onto the
+    // current file, so several ghosts targeting one path compose rather than
+    // overwriting each other. Keep queue order (newest first) stable.
     for (var i = 0; i < pend.length; i++) {
       try {
         var r = await g.AETHER_Ghost.accept(pend[i].id);
         if (r && r.ok) n++;
-      } catch (e) {}
+        else failed.push({ id: pend[i].id, path: pend[i].path, error: r && r.error });
+      } catch (e) {
+        failed.push({ id: pend[i].id, path: pend[i].path, error: e.message });
+      }
     }
-    if (g.showNotification) g.showNotification('Accepted ' + n + '/' + pend.length + ' ghosts', 'success');
+    if (g.showNotification) {
+      g.showNotification(
+        'Accepted ' + n + '/' + pend.length + ' ghosts' + (failed.length ? ' — ' + failed.length + ' conflict(s)' : ''),
+        failed.length ? 'warn' : 'success'
+      );
+    }
     if (_autoVerify) await runVerify();
     renderBar();
-    return { ok: true, n: n };
+    return { ok: failed.length === 0, n: n, failed: failed };
   }
 
   function rejectAllGhosts() {

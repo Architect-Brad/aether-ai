@@ -9,6 +9,12 @@
   var QUEUE_KEY = 'aether_ghost_commits_v1';
   var _host = null;
   var _preferredHost = null;
+  // Last content this session wrote for each path. Used only when a real
+  // re-read is unavailable, so sequential accepts compose instead of
+  // falling back to the (stale) propose-time "before" snapshot.
+  var _lastWritten = Object.create(null);
+  // Per-path accept queue — serialises concurrent accepts to the same path.
+  var _acceptQueues = Object.create(null);
 
   function loadQueue() {
     try {
@@ -353,7 +359,14 @@
         }
       } catch (e) {}
     }
+    // No trustworthy re-read — prefer what we last wrote over the proposal's
+    // original snapshot so multiple ghosts on one path stack correctly.
+    if (_lastWritten[path] != null) return _lastWritten[path];
     return fallback != null ? String(fallback) : '';
+  }
+
+  function rememberWrite(path, content) {
+    _lastWritten[path] = String(content);
   }
 
   /**
@@ -386,7 +399,64 @@
     return content.slice(0, idx) + newT + content.slice(idx + oldT.length);
   }
 
-  async function accept(id) {
+  /**
+   * Rebase a ghost's before→after delta onto whatever is on disk now.
+   * Only the proposed hunks are replayed, so unrelated later edits survive.
+   * Returns {ok:true, content} or {ok:false, error} — never guesses when a
+   * hunk no longer applies unambiguously (fail closed).
+   */
+  function rebaseProposedChange(item, current) {
+    var before = item.before != null ? String(item.before) : '';
+    var after = item.after != null ? String(item.after) : '';
+    if (current === before) return { ok: true, content: after, applied: 0 };
+    // If individual hunks were already accepted/rejected, replay only the
+    // still-pending ones instead of reintroducing a rejected change.
+    var hunks;
+    var partial = item.hunks && item.hunks.some(function (h) {
+      return h.status && h.status !== 'pending';
+    });
+    if (partial) {
+      hunks = item.hunks.filter(function (h) {
+        return !h.status || h.status === 'pending';
+      });
+    } else {
+      hunks = computeHunks(before, after);
+    }
+    if (!hunks.length) return { ok: true, content: current, applied: 0 };
+    var rebuilt = current;
+    for (var i = 0; i < hunks.length; i++) {
+      var next = applyHunkToContent(rebuilt, hunks[i]);
+      if (next && next.error) {
+        return { ok: false, error: 'rebase failed: ' + next.error };
+      }
+      rebuilt = next;
+    }
+    return { ok: true, content: rebuilt, applied: hunks.length };
+  }
+
+  /** Serialise accepts for one path so concurrent accepts compose too. */
+  function withPathLock(path, fn) {
+    var prev = _acceptQueues[path] || Promise.resolve();
+    var run = prev.then(fn, fn);
+    var guard = run.catch(function () {});
+    _acceptQueues[path] = guard;
+    guard.then(function () {
+      if (_acceptQueues[path] === guard) delete _acceptQueues[path];
+    });
+    return run;
+  }
+
+  function accept(id) {
+    var snapshot = loadQueue().find(function (x) {
+      return x.id === id;
+    });
+    if (!snapshot) return Promise.resolve({ ok: false, error: 'not found' });
+    return withPathLock(snapshot.path, function () {
+      return acceptLocked(id);
+    });
+  }
+
+  async function acceptLocked(id) {
     var q = loadQueue();
     var item = q.find(function (x) {
       return x.id === id;
@@ -399,6 +469,7 @@
       var target = item.after != null ? String(item.after) : current;
 
       if (current === target) {
+        rememberWrite(item.path, current);
         item.status = 'accepted';
         item.appliedAt = Date.now();
         item.result = 'already applied (file matches target)';
@@ -415,38 +486,24 @@
         return { ok: true, result: item.result, already: true };
       }
 
-      // If file drifted from propose-time "before", try remaining hunks or fail clearly
-      if (item.before != null && current !== String(item.before) && item.kind === 'patch' && item.hunks && item.hunks.length) {
-        var rebuilt = current;
-        var hunkErr = null;
-        for (var hi = 0; hi < item.hunks.length; hi++) {
-          var hk = item.hunks[hi];
-          if (hk.status && hk.status !== 'pending') continue;
-          var next = applyHunkToContent(rebuilt, hk);
-          if (next && next.error) {
-            hunkErr = next.error;
-            break;
-          }
-          rebuilt = next;
-          hk.status = 'accepted';
-        }
-        if (hunkErr) {
-          item.lastError = hunkErr;
+      // Drift: rebase the proposed delta onto the current file instead of
+      // overwriting it with the stale full target. Multiple ghosts on one
+      // path now compose (each accept rebases onto the previous write).
+      // If any hunk no longer applies, fail closed — never clobber.
+      if (item.before != null && current !== String(item.before)) {
+        var rebased = rebaseProposedChange(item, current);
+        if (!rebased.ok) {
+          item.lastError = rebased.error;
           saveQueue(q);
           render();
           if (g.showNotification) {
-            g.showNotification('Conflict on ' + item.path + ': ' + hunkErr + ' — re-patch or Accept all after refresh', 'error');
+            g.showNotification('Conflict on ' + item.path + ': ' + rebased.error + ' — re-propose after refresh', 'error');
           }
-          if (g.AETHER_Kernel) g.AETHER_Kernel.log('ghost.conflict', item.path + ' ' + hunkErr, 'write', { ok: false });
-          return { ok: false, error: hunkErr, conflict: true };
+          if (g.AETHER_Kernel) g.AETHER_Kernel.log('ghost.conflict', item.path + ' ' + rebased.error, 'write', { ok: false });
+          return { ok: false, error: rebased.error, conflict: true };
         }
-        target = rebuilt;
-      } else if (item.before != null && current !== String(item.before) && item.kind !== 'patch') {
-        // Full-file ghost: file changed under us — still allow if user confirms via force path
-        // Prefer writing target but warn
-        if (g.showNotification) {
-          g.showNotification('File changed since Ghost — applying target content', 'warn');
-        }
+        target = rebased.content;
+        item.rebased = true;
       }
 
       // Write with one retry on transient failure
@@ -459,6 +516,8 @@
         });
         result = await forceWrite(item.path, target);
       }
+
+      rememberWrite(item.path, target);
 
       // Verify disk matches target (best-effort)
       var verify = await readCurrent(item.path, target);
@@ -533,6 +592,7 @@
         return { ok: false, error: next.error };
       }
       var result = await forceWrite(item.path, next);
+      rememberWrite(item.path, next);
       hunk.status = 'accepted';
       hunk.appliedAt = Date.now();
 
@@ -909,6 +969,7 @@
     diffStats: diffStats,
     computeHunks: computeHunks,
     lineOps: lineOps,
+    rebase: rebaseProposedChange,
     emitGutter: emitGutter,
   };
 

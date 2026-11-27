@@ -1,8 +1,10 @@
-# AETHER Architecture (v5.40 Beast Mode)
+# AETHER Architecture (v5.40 Hero Path)
 
 ## Thesis
 
-AETHER is a **browser-native agent OS**: multi-provider chat, tools, workspace memory, speech, and agent loops — with **no application backend**. The browser *is* the runtime.
+AETHER is a **browser-native agent OS**: multi-provider chat, tools, workspace memory,
+speech, and agent loops — with **no application backend by default**. The browser *is*
+the runtime. Cloud auth/sync is optional and opt-in (see "Persistence" below).
 
 ## Runtime layers
 
@@ -11,7 +13,7 @@ AETHER is a **browser-native agent OS**: multi-provider chat, tools, workspace m
 │  UI shell (index.html + style.css)          │
 │  splash · sidebar · hero toolbar · modals   │
 ├─────────────────────────────────────────────┤
-│  core/*  (version, math, caps, beast)       │
+│  core/*  (version, utils, math, caps, beast)│
 ├─────────────────────────────────────────────┤
 │  script.js  — application brain             │
 │  state · providers · tools · stream · soul  │
@@ -28,36 +30,41 @@ AETHER is a **browser-native agent OS**: multi-provider chat, tools, workspace m
 └─────────────────────────────────────────────┘
 ```
 
+All `core/*` scripts and `script.js` load as classic `<script defer>` IIFEs that attach
+to `window`/`globalThis`; there is no bundler and no `type="module"` entry today.
+
 ## Data flow (chat)
 
 1. User input → `sendMessage()`
 2. Build system prompt (`buildSystemPrompt`) + persona + workspace manifest + RAG + Beast addon
 3. Provider-specific request body / auth via `buildAuthHeaders`
-4. Stream tokens → markdown renderer → tool parse (`[[tool]]` / XML)
-5. `callTool` → `TOOL_REGISTRY` → results re-injected for agent loops
+4. Stream tokens → markdown renderer → tool parse (native `tool_calls`, with `[[tool]]` / XML fallback)
+5. `callTool` → `TOOL_REGISTRY` → results re-injected for agent loops (depth 3–4)
 6. Persist conversation + optional workspace logs
 
 ## Beast Mode
 
 `core/beast-mode.js` toggles a **profile**, not a separate engine:
 
-- Research defaults → exhaustive / comprehensive / critical  
-- `state.beastMode = true`  
-- System prompt bias toward tool use and completion  
-- Coding destructive-tool permission gate skipped  
+- Research defaults → exhaustive / comprehensive / critical
+- `state.beastMode = true`
+- System prompt bias toward tool use and completion
+- Coding destructive-tool permission gate bypassed
 - UI chrome (`html.beast-mode`, badge, button pulse)
 
-## Modularisation plan
+## Modularisation roadmap (future work unless marked Done)
 
-| Phase | Goal |
-|-------|------|
-| **Done (5.16)** | `core/version`, `safe-math`, `capabilities`, `beast-mode` |
-| **Done (5.40)** | `core/utils.js` — canonical `esc`/`uid`/constants; 15 local `esc`/`uid` copies removed |
-| Next | Extract `TOOL_REGISTRY` domains to `core/tools/*.js` |
-| Next | Extract markdown + streaming to `core/render/` |
-| Later | Convert main entry to `type="module"` once globals are eliminated |
+| Status | Goal |
+|--------|------|
+| **Done (v5.16)** | `core/version.js`, `safe-math.js`, `capabilities.js`, `beast-mode.js` |
+| **Done (v5.40)** | `core/utils.js` — canonical `esc`/`uid`/shared constants, consumed by `script.js` |
+| **Future** | Extract `TOOL_REGISTRY` domains to `core/tools/*.js` |
+| **Future** | Extract markdown + streaming to `core/render/` |
+| **Future (later)** | Convert the main entry to `type="module"` once globals are eliminated |
 
-Constraint: **no bundler**. Prefer classic scripts → then ES modules.
+Everything below "Done" is a **plan, not shipped behaviour**. The shipped entry remains
+classic scripts with globals: prefer classic scripts → ES modules only when the globals
+are gone. No bundler is planned for the core runtime.
 
 ## Security model
 
@@ -65,19 +72,9 @@ Constraint: **no bundler**. Prefer classic scripts → then ES modules.
 |-------|------------|
 | API keys at rest | Optional AES-256-GCM + PBKDF2 (session passphrase in memory; keys encrypted on save, unlocked on load) |
 | API keys in use | Session memory only |
-| Math tool | Restricted evaluator / mathjs (no eval) |
+| Math tool | Restricted evaluator / mathjs (no `eval`) |
 | Skills | Architect-authored only |
 | XSS | Classic browser app risk — treat as trusted origin |
-
-## Competitors (positioning)
-
-| Class | Examples | AETHER stance |
-|-------|----------|---------------|
-| Self-hosted platforms | Open WebUI, LibreChat | They win multi-user ops; we win zero-backend sovereignty |
-| Thin chat UIs | Chatbot UI | We win agent/tool density |
-| Closed apps | ChatGPT/Claude apps | We win bring-your-own-model + local |
-
-North star: **personal agent shell**, not enterprise chat platform.
 
 ## Key files by concern
 
@@ -85,10 +82,10 @@ North star: **personal agent shell**, not enterprise chat platform.
 |---------|------|
 | Version | `core/version.js` |
 | Providers / auth | `script.js` SECTION 9 + `PROVIDER_REGISTRY` |
-| Tools | `TOOL_REGISTRY` ~SECTION 16 |
+| Tools | `TOOL_REGISTRY` SECTION 16 |
 | Agent | SECTION 18 |
 | Streaming | SECTION 17 / `sendMessage` |
 | SOUL | SECTION 19 |
 | SW cache | `sw.js` |
 
-— Maintained with the Beast Mode consolidation release.
+— Aligned with v5.40 Hero Path. Version source of truth: `core/version.js`.

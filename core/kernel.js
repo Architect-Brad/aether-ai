@@ -125,18 +125,31 @@
       var preview = args.map(function (a) {
         return typeof a === 'string' ? a.slice(0, 80) : JSON.stringify(a).slice(0, 80);
       }).join(' | ');
+      // Never persist raw secrets into flight events (endFlight serializes
+      // these to localStorage). Feature-detect the optional security module.
+      if (g.AETHER_Security && g.AETHER_Security.redactSecrets) {
+        preview = g.AETHER_Security.redactSecrets(preview);
+      }
       var cls = classify(name);
       var t0 = performance.now ? performance.now() : Date.now();
       log(name, preview, cls);
       try {
         var result = await fn.apply(null, args);
         var ms = Math.round((performance.now ? performance.now() : Date.now()) - t0);
-        log(name + '.ok', String(result).slice(0, 120), cls, { ok: true, ms: ms });
+        var resultPreview = String(result).slice(0, 120);
+        if (g.AETHER_Security && g.AETHER_Security.redactSecrets) {
+          resultPreview = g.AETHER_Security.redactSecrets(resultPreview);
+        }
+        log(name + '.ok', resultPreview, cls, { ok: true, ms: ms });
         if (g.AETHER_Theater && g.AETHER_Theater.toolPulse) g.AETHER_Theater.toolPulse(name, true);
         return result;
       } catch (e) {
         var ms2 = Math.round((performance.now ? performance.now() : Date.now()) - t0);
-        log(name + '.ERR', e.message || String(e), cls, { ok: false, ms: ms2 });
+        var errPreview = e.message || String(e);
+        if (g.AETHER_Security && g.AETHER_Security.redactSecrets) {
+          errPreview = g.AETHER_Security.redactSecrets(errPreview);
+        }
+        log(name + '.ERR', errPreview, cls, { ok: false, ms: ms2 });
         if (g.AETHER_Theater && g.AETHER_Theater.toolPulse) g.AETHER_Theater.toolPulse(name, false);
         throw e;
       }
