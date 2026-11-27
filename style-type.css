@@ -1,0 +1,114 @@
+/* ═══════════════════════════════════════════════════════════
+ * AETHER — TYPOGRAPHY SHARPNESS PASS (style-type.css)
+ * Load LAST: after style.css, style-ivory.css, style-mobile.css,
+ * style-motion.css. Additive overrides only — no edits upstream.
+ *
+ * Goal: crisp, readable body/message text in the DARK theme on
+ * small screens, without touching the deliberate neon spectacle
+ * (splash title, logo, headings, buttons) or the Ivory paper theme.
+ *
+ * Every rule is scoped and degradation-safe: missing elements
+ * cost nothing. No !important — Ivory's own !important rules are
+ * left completely untouched (we never fight them).
+ * ═══════════════════════════════════════════════════════════ */
+
+/* ───────────────────────────────────────────────────────────
+ * 1. FONT STACK — Courier New (style.css:46) is thin, old and
+ * poorly hinted on modern/Android screens. Override in place,
+ * keeping the variable NAME. Ivory keeps its original Courier
+ * stack so its typewriter-paper character is unchanged.
+ * ─────────────────────────────────────────────────────────── */
+:root {
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+html[data-aether-theme="ivory"],
+html.theme-light,
+body.theme-light {
+    --font-mono: 'Courier New', monospace; /* Ivory untouched */
+}
+
+/* No --font-sans / --font-ui definition exists upstream (--font-ui is
+   referenced but undefined). Nothing to override; nothing renamed. */
+
+/* ───────────────────────────────────────────────────────────
+ * 2. CRISP RENDERING — dark theme only. The :not() chain excludes
+ * both Ivory activation paths (data-aether-theme + .theme-light).
+ * Inheritance carries these down to all text; Ivory never sees them.
+ * ─────────────────────────────────────────────────────────── */
+html:not([data-aether-theme="ivory"]):not(.theme-light),
+html:not([data-aether-theme="ivory"]):not(.theme-light) body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+}
+
+/* ───────────────────────────────────────────────────────────
+ * 3. READABLE CONTENT TEXT — no fake bold/italic synthesis and no
+ * glow blur. Scoped to chat/message/metric text ONLY.
+ *
+ * Deliberately NOT touched: .splash-title, .logo-text,
+ * .sidebar-header h2, .modern-heading, .ob-brand, .quota-spent,
+ * .status-state, .connection-indicator, .cmd-btn / all buttons,
+ * .aether-msg a:hover, .cursor-blink, .soul-modal-title — those
+ * glows are intentional spectacle, not unreadable body copy.
+ * ─────────────────────────────────────────────────────────── */
+html:not([data-aether-theme="ivory"]):not(.theme-light) .console-output,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .aether-msg,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .user-msg,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-status-text,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-sub-text,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-tps,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-latency,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .cb-body code,
+html:not([data-aether-theme="ivory"]):not(.theme-light) .cb-line-nums span {
+    font-synthesis: none;        /* no synthetic bold/italic = no smeared glyphs */
+    text-shadow: none;           /* kills the inherited/glow blur on copy */
+}
+
+/* ───────────────────────────────────────────────────────────
+ * 4. SMALL-SCREEN TUNING — monospace needs breathing room below
+ * 820px, and a hard readable floor at the 390px phone width.
+ * style-mobile.css sets .aether-msg/.user-msg to .78rem with
+ * line-height 1.5 at <=480px; we raise that floor here.
+ * Dark theme only, so Ivory's own sizing stays as authored.
+ * ─────────────────────────────────────────────────────────── */
+@media (max-width: 820px) {
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .aether-msg,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .user-msg {
+        line-height: 1.62;
+        letter-spacing: 0.01em;
+    }
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .aether-msg p,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .user-msg p {
+        line-height: 1.62;
+        letter-spacing: 0.01em;
+    }
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .cb-body code,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .cb-line-nums span {
+        font-size: 0.8rem;
+        line-height: 1.6;
+    }
+}
+
+@media (max-width: 480px) {
+    /* Readable floor for chat body copy on the 390px phone. */
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .aether-msg,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .user-msg {
+        font-size: 0.85rem;
+        line-height: 1.65;
+        letter-spacing: 0.012em;
+    }
+
+    /* Metric/meta text: .56rem sub-text was below a readable floor. */
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-sub-text,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-status-text {
+        font-size: 0.7rem;
+        letter-spacing: 0.04em;
+    }
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-tps,
+    html:not([data-aether-theme="ivory"]):not(.theme-light) .ap-latency {
+        font-size: 0.66rem;
+        letter-spacing: 0.02em;
+    }
+}

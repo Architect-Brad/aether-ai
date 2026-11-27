@@ -13052,7 +13052,25 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
         }
         return (c ^ 0xFFFFFFFF) >>> 0;
     }
-    function smoothScrollToBottom() { setTimeout(()=>display.scrollTo({top:display.scrollHeight,behavior:'smooth'}),80); }
+    // Streaming calls this on every token. Restarting a smooth scroll each time
+    // is janky — coalesce to one scroll per frame and respect reduced motion.
+    const _smoothScrollFrame = (typeof AETHER_Smooth !== 'undefined' && AETHER_Smooth.throttleToFrame)
+        ? AETHER_Smooth.throttleToFrame(function () {
+            display.scrollTo({
+                top: display.scrollHeight,
+                behavior: (typeof AETHER_Smooth !== 'undefined' && !AETHER_Smooth.motionEnabled()) ? 'auto' : 'smooth'
+            });
+        })
+        : null;
+    function smoothScrollToBottom() {
+        if (_smoothScrollFrame) { _smoothScrollFrame(); return; }
+        setTimeout(function () {
+            display.scrollTo({
+                top: display.scrollHeight,
+                behavior: (typeof AETHER_Smooth !== 'undefined' && !AETHER_Smooth.motionEnabled()) ? 'auto' : 'smooth'
+            });
+        }, 80);
+    }
     function showNotification(msg, type='info') {
         const c = $('notification-container'); if(!c) return;
         // Normalize aliases (warning → warn)

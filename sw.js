@@ -1,7 +1,7 @@
 // AETHER Neural Interface — Service Worker v5.40 · GPL-3.0 · Hero Path
-const CACHE_VERSION='aether-v5.40.4',STATIC_CACHE=`${CACHE_VERSION}-static`,CDN_CACHE=`${CACHE_VERSION}-cdn`,DYNAMIC_CACHE=`${CACHE_VERSION}-dynamic`;
+const CACHE_VERSION='aether-v5.40.5',STATIC_CACHE=`${CACHE_VERSION}-static`,CDN_CACHE=`${CACHE_VERSION}-cdn`,DYNAMIC_CACHE=`${CACHE_VERSION}-dynamic`;
 const CORE_ASSETS=[
-  './','./index.html','./script.js','./style.css','./style-ivory.css','./style-mobile.css','./style-motion.css','./manifest.json','./logo.svg',
+  './','./index.html','./script.js','./style.css','./style-ivory.css','./style-mobile.css','./style-motion.css','./style-type.css','./style-anim.css','./manifest.json','./logo.svg',
   './core/version.js','./core/utils.js','./core/pack-loader.js','./core/smooth-runtime.js','./core/mobile-ui.js','./core/safe-math.js','./core/aether-lazy-cdn.js','./core/capabilities.js','./core/beast-mode.js','./core/skill-utils.js','./core/aether-skills-pack.js','./core/aether-skill-runtime.js','./core/aether-deep-research.js','./core/vendor-loader.js',
   './core/kernel.js','./core/aether-security.js','./core/aether-tool-runtime.js','./core/aether-rag-v2.js','./core/soul-os.js','./core/model-council.js','./core/thread-graph.js',
   './core/ghost-commits.js','./core/aether-code-pro.js','./core/aether-subagents.js','./core/aether-changeset.js','./core/aether-tool-packs.js',
