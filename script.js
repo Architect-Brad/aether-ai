@@ -104,6 +104,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const sidebar         = $('sidebar');
     const sidebarOpen     = $('sidebar-open');
     const sidebarClose    = $('sidebar-close');
+    // Mirror the sidebar state onto <body> so CSS can keep the fixed kernel
+    // panel from drawing on top of the open drawer on small screens.
+    function syncSidebarState() {
+        if (sidebar) document.body.classList.toggle('sidebar-open', !sidebar.classList.contains('hidden'));
+    }
     const conversationList= $('conversation-list');
     const btnNewChat      = $('btn-new-chat');
     const btnStop         = $('btn-stop');
@@ -1173,6 +1178,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setTimeout(() => {
             if (sidebar && !sidebar.classList.contains('hidden')) {
                 sidebar.classList.add('hidden');
+                syncSidebarState();
                 sidebar.style.transform = 'translateX(-100%)';
                 sidebar.style.pointerEvents = 'none';
             }
@@ -14014,7 +14020,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
             const sorted = Object.values(state.conversations)
                 .sort((a, b) => new Date(b.updated) - new Date(a.updated));
             if (!sorted.length) {
-                conversationList.innerHTML = '<div style="padding:28px 20px;text-align:center;color:#445;font-size:.75rem;display:flex;flex-direction:column;align-items:center;gap:10px"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#334" stroke-width="1.2" style="opacity:0.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>No conversations yet</span><button class="cmd-btn" style="font-size:.72rem;padding:4px 12px" onclick="document.getElementById(\'btn-new-chat\')?.click()">+ Start new</button></div>';
+                conversationList.innerHTML = '<div style="padding:28px 20px;text-align:center;color:#93a9bd;font-size:.8rem;display:flex;flex-direction:column;align-items:center;gap:10px"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#6c8498" stroke-width="1.2" style="opacity:.85"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>No conversations yet</span><button class="cmd-btn" style="font-size:.74rem;padding:6px 14px" onclick="document.getElementById(\'btn-new-chat\')?.click()">+ Start new</button></div>';
                 return;
             }
             const frag = document.createDocumentFragment();
@@ -14031,7 +14037,7 @@ Do NOT search for: basic facts, math, definitions, or things you're confident ab
                 item.addEventListener('click', e => {
                     if (!e.target.classList.contains('conversation-delete')) {
                         setActiveConversation(conv.id);
-                        if (window.innerWidth <= 768) sidebar.classList.add('hidden');
+                        if (window.innerWidth <= 768) { sidebar.classList.add('hidden'); syncSidebarState(); }
                     }
                 });
                 item.querySelector('.conversation-delete').addEventListener('click', e => {
@@ -20851,7 +20857,7 @@ Format the final summary as a single, clean text block divided into the five lab
     const sttBtn=document.getElementById('stt-btn'); if(sttBtn) sttBtn.addEventListener('click',toggleSTT);
     // Coding mode button
     if(btnCodingMode) btnCodingMode.addEventListener('click',toggleCodingMode);
-    const newChatFn=()=>{resetTokenUsage();const id=createNewConversation();setActiveConversation(id);if(window.innerWidth<=768)sidebar.classList.add('hidden');showNotification('New conversation','success');};
+    const newChatFn=()=>{resetTokenUsage();const id=createNewConversation();setActiveConversation(id);if(window.innerWidth<=768){sidebar.classList.add('hidden');syncSidebarState();}showNotification('New conversation','success');};
     if(btnNewChat) btnNewChat.addEventListener('click',newChatFn);
     if(btnNewChatMain) btnNewChatMain.addEventListener('click',newChatFn);
     if(btnExport) btnExport.addEventListener('click',()=>{
@@ -20876,6 +20882,7 @@ Format the final summary as a single, clean text block divided into the five lab
         sidebarClose.addEventListener('click', (e) => {
             e.stopPropagation();
             sidebar.classList.add('hidden');
+            syncSidebarState();
             // Belt-and-suspenders for mobile WebViews
             if(window.innerWidth <= 768) {
                 sidebar.style.transform = 'translateX(-100%)';
@@ -20888,6 +20895,7 @@ Format the final summary as a single, clean text block divided into the five lab
         sidebarOpen.addEventListener('click', (e) => {
             e.stopPropagation();
             sidebar.classList.remove('hidden');
+            syncSidebarState();
             sidebar.style.transform = '';
             sidebar.style.pointerEvents = '';
             sidebar.style.visibility = '';
@@ -20897,7 +20905,7 @@ Format the final summary as a single, clean text block divided into the five lab
 
     // Watch sidebar class changes to keep badge in sync automatically
     if (sidebar && sidebarBadge) {
-        var sidebarObserver = new MutationObserver(function() { updateSidebarBadge(); });
+        var sidebarObserver = new MutationObserver(function() { updateSidebarBadge(); syncSidebarState(); });
         sidebarObserver.observe(sidebar, { attributes: true, attributeFilter: ['class'] });
     }
 
@@ -20921,7 +20929,7 @@ Format the final summary as a single, clean text block divided into the five lab
         // Ctrl+B or Cmd+B toggles the sidebar
         if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
             e.preventDefault();
-            if (sidebar) { sidebar.classList.toggle('hidden'); updateSidebarBadge(); }
+            if (sidebar) { sidebar.classList.toggle('hidden'); syncSidebarState(); updateSidebarBadge(); }
         }
     });
 
@@ -21441,6 +21449,7 @@ Format the final summary as a single, clean text block divided into the five lab
     }
 
     renderConversationList();
+    syncSidebarState();
     updateUIFromState();
     updateDualChatUI();
     if(input) input.focus();
